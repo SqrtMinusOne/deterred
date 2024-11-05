@@ -49,11 +49,17 @@
   )")
 
 (defun deterred-db--is-initialized (db)
+  "Return non-nil if the `deterred' database has been initialized.
+
+DB is a sqlite database object."
   (sqlite-select
    db "select * from sqlite_master where type = 'table'
         and name = 'meta_db_migrations'"))
 
 (defun deterred-db--migrations-get-pending (db)
+  "Return a list of pending migrations for the `deterred' database.
+
+DB is a sqlite database object."
   (let* ((all-migrations (thread-last
                            deterred-db-migrations-location
                            (directory-files)
@@ -68,12 +74,15 @@
     pending-migrations))
 
 (defun deterred-db--migrations-execute (db pending)
+  "Execute migrations on database.
+
+DB is a sqlite database object.  PENDING is a list of migrations."
   (dolist (file pending)
-    (let* ((sql-string (with-temp-buffer
-                         (insert-file-contents (concat
-                                                deterred-db-migrations-location
-                                                "/" file))
-                         (buffer-string)))
+    (let* ((sql-string
+            (with-temp-buffer
+              (insert-file-contents
+               (concat deterred-db-migrations-location "/" file))
+              (buffer-string)))
            (statements
             (thread-last
               (split-string sql-string ";" t)
@@ -81,11 +90,11 @@
               (seq-filter (lambda (s) (not (string-empty-p s)))))))
       (with-sqlite-transaction db
         (dolist (statement statements)
-          (setq my/test statement)
           (sqlite-execute db statement))
         (sqlite-execute db "insert into meta_db_migrations values (?)" (list file))))))
 
 (defun deterred-db--init ()
+  "Initialize the `deterred' database.  Return a sqlite object."
   (let* ((db-loc (expand-file-name deterred-db-location))
          (db-dir (directory-file-name
                   (file-name-directory db-loc)))

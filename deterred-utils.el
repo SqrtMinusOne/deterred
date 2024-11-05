@@ -1,12 +1,10 @@
-;;; deterred.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-utils.el --- TODO -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
-;; Version: 0.1.0
-;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0"))
-;; Homepage: https://github.com/SqrtMinusOne/deterred.el
+;; Homepage: https://github.com/SqrtMinusOne/deterred-utils.el
 
 ;; This file is NOT part of GNU Emacs.
 
@@ -28,9 +26,19 @@
 ;; TODO
 
 ;;; Code:
-(defgroup deterred nil
-  "Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard."
-  :group 'applications)
+(defun deterred-utils-uuid-to-sqlite-hex (uuid)
+  "Convert UUID string to SQLite hex literal."
+  (concat
+   "X'" (replace-regexp-in-string "-" "" uuid) "'"))
 
-(provide 'deterred)
-;;; deterred.el ends here
+(defun deterred-utils-sqlite-hex-to-uuid (hex-string)
+  "Convert HEX-STRING from SQLite hex() function to UUID format."
+  (format "%s-%s-%s-%s-%s"
+          (substring hex-string 0 8)
+          (substring hex-string 8 12)
+          (substring hex-string 12 16)
+          (substring hex-string 16 20)
+          (substring hex-string 20 32)))
+
+(provide 'deterred-utils)
+;;; deterred-utils.el ends here
