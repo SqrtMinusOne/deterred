@@ -1,0 +1,8 @@
+#+TITLE: deterred
+
+Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard
+
+#+begin_src emacs-lisp
+(use-package libmpdel
+  :straight t)
+#+end_src

@@ -26,14 +26,22 @@
 ;; TODO
 
 ;;; Code:
+(require 'deterred-db)
 (require 'libmpdel)
 
+(defconst deterred-mpd-uuid-namespace
+  "c66d74fc-c243-4d8e-9e0a-72a88b78132b")
+
 (defun deterred-mpd--list-all (callback)
+  "List all songs in MPD (with listallinfo).
+
+Call CALLBACK with the results."
   (libmpdel-ensure-connection)
   (libmpdel-send-command
    "listallinfo "
    (lambda (response)
-     (funcall
+     (run-with-timer
+      0 nil
       callback
       (let ((alists nil)
             (alist nil))
@@ -46,33 +54,44 @@
           (setq alists (cons alist alists)))
         alists)))))
 
+(defun deterred-mpd--song-uuid (file)
+  (uuidgen-3 deterred-mpd-uuid-namespace file))
+
 (defun deterred-mpd--insert-songs (data db)
-  (let* ((values (mapconcat
-                  (lambda (datum)
-                    (concat
-                     "("
-                     (string-join
-                      (list
-                       (deterred-utils-uuid-to-sqlite-hex
-                        (uuidgen-3 "mpd" (alist-get 'file datum)))
-                       (format "'%s'" (alist-get 'file datum))
-                       (alist-get 'Time datum)
-                       (format "'%s'" (alist-get 'Artist datum))
-                       (format "'%s'" (alist-get 'AlbumArtist datum))
-                       (format "'%s'" (alist-get 'Album datum))
-                       (format "'%s'" (alist-get 'Title datum))
-                       (format "'%s'" (alist-get 'MUSICBRAINZ_TRACKID datum)))
-                      ", ")
-                     ")"))
-                  (seq-filter
-                   (lambda (datum)
-                     (alist-get 'file datum))
-                   data)
-                  ",\n")))
-    (sqlite-execute
-     db
-     (format
-      "INSERT into mpd_song (id, file, duration, artist, album_artist, album, title, musicbrainz_trackid)
+  "Insert or update MPD songs into database.
+
+DATA is the output of `deterred-mpd--list-all'.  DB a sqlite database
+instance."
+  (let* ((values
+          (mapconcat
+           (lambda (datum)
+             (concat
+              "("
+              (string-join
+               (mapcar (lambda (item)
+                         (cond ((null item) "NULL")
+                               ((integerp item) (number-to-string item))
+                               ((stringp item) (deterred-db--escape item))))
+                       (list
+                        (deterred-mpd--song-uuid (alist-get 'file datum))
+                        (alist-get 'file datum)
+                        (alist-get 'Time datum)
+                        (alist-get 'Artist datum)
+                        (or (alist-get 'AlbumArtist datum)
+                            (alist-get 'Artist datum))
+                        (alist-get 'Album datum)
+                        (alist-get 'Title datum)
+                        (alist-get 'MUSICBRAINZ_TRACKID datum)) )
+               ", ")
+              ")"))
+           (seq-filter
+            (lambda (datum)
+              (alist-get 'file datum))
+            data)
+           ",\n"))
+         (query
+          (format
+           "INSERT into mpd_song (id, file, duration, artist, album_artist, album, title, musicbrainz_trackid)
          VALUES %s
          ON CONFLICT (id) DO UPDATE SET
            file=excluded.file,
@@ -83,9 +102,18 @@
            title=excluded.title,
            year=excluded.year,
            musicbrainz_trackid=excluded.musicbrainz_trackid"
-      values))))
+           values)))
+    (with-sqlite-transaction db
+      (sqlite-execute db query)
+      (deterred-db--mark-updated "mpd_song" db))))
 
-(deterred-mpd--insert-songs my/test2 my/test)
+(defun deterred-mpd-update-library ()
+  (interactive)
+  (let ((db (deterred-db--init)))
+    (deterred-mpd--list-all
+     (lambda (data)
+       (setq my/test data)
+       (deterred-mpd--insert-songs data db)))))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

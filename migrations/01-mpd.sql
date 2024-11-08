@@ -4,7 +4,7 @@ CREATE TABLE meta_table_updates (
 ) STRICT;
 
 CREATE TABLE mpd_song (
-	id BLOB PRIMARY KEY NOT NULL,
+	id TEXT PRIMARY KEY NOT NULL,
 	file text NOT NULL UNIQUE,
 	duration int NOT NULL,
 	artist text NULL,
@@ -16,7 +16,7 @@ CREATE TABLE mpd_song (
 ) STRICT;
 
 CREATE TABLE mpd_song_listened (
-  mpd_song_id BLOB NOT NULL,
+  mpd_song_id TEXT NOT NULL,
   timestamp INTEGER,
   PRIMARY KEY(mpd_song_id, timestamp),
   FOREIGN KEY (mpd_song_id) REFERENCES mpd_song(id)

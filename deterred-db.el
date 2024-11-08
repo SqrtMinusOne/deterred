@@ -48,6 +48,16 @@
     file varchar(255) primary key
   )")
 
+(defun deterred-db--escape (string)
+  "Escape STRING for sqlite.
+
+This is not sanitization.  Don't use for untrusted inputs."
+  (when string
+    (concat
+     "'"
+     (string-replace "'" "''" string)
+     "'")))
+
 (defun deterred-db--is-initialized (db)
   "Return non-nil if the `deterred' database has been initialized.
 
@@ -111,6 +121,14 @@ DB is a sqlite database object.  PENDING is a list of migrations."
       (deterred-db--migrations-execute
        db (deterred-db--migrations-get-pending db))
       db)))
+
+(defun deterred-db--mark-updated (table-name db)
+  (sqlite-execute
+   db "INSERT INTO meta_table_updates (table_name, last_updated)
+       VALUES (?, unixepoch(CURRENT_TIMESTAMP))
+         ON CONFLICT (table_name)
+         DO UPDATE SET last_updated = unixepoch(CURRENT_TIMESTAMP)"
+   (list table-name)))
 
 (provide 'deterred-db)
 ;;; deterred-db.el ends here
