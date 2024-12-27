@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'pcsv)
 (require 'libmpdel)
 
 (defconst deterred-mpd-uuid-namespace
@@ -54,7 +55,14 @@ Call CALLBACK with the results."
           (setq alists (cons alist alists)))
         alists)))))
 
+(defun deterred-mpd--ensure-year (string)
+  "Extract the first four digits of STRING or return nil."
+  (when (and string
+             (string-match-p (rx bos (= 4 digit)) string))
+    (substring string 0 4)))
+
 (defun deterred-mpd--song-uuid (file)
+  "Create a UUID from FILE."
   (uuidgen-3 deterred-mpd-uuid-namespace file))
 
 (defun deterred-mpd--insert-songs (data db)
@@ -81,7 +89,9 @@ instance."
                             (alist-get 'Artist datum))
                         (alist-get 'Album datum)
                         (alist-get 'Title datum)
-                        (alist-get 'MUSICBRAINZ_TRACKID datum)) )
+                        (deterred-mpd--ensure-year
+                         (alist-get 'Date datum))
+                        (alist-get 'MUSICBRAINZ_TRACKID datum)))
                ", ")
               ")"))
            (seq-filter
@@ -91,7 +101,7 @@ instance."
            ",\n"))
          (query
           (format
-           "INSERT into mpd_song (id, file, duration, artist, album_artist, album, title, musicbrainz_trackid)
+           "INSERT into mpd_song (id, file, duration, artist, album_artist, album, title, year, musicbrainz_trackid)
          VALUES %s
          ON CONFLICT (id) DO UPDATE SET
            file=excluded.file,
@@ -108,12 +118,74 @@ instance."
       (deterred-db--mark-updated "mpd_song" db))))
 
 (defun deterred-mpd-update-library ()
+  "Update MPD songs in the DETERRED database."
   (interactive)
   (let ((db (deterred-db--init)))
     (deterred-mpd--list-all
      (lambda (data)
-       (setq my/test data)
-       (deterred-mpd--insert-songs data db)))))
+       (deterred-mpd--insert-songs data db)
+       (message "%s MPD songs upserted" (seq-length data))))))
+
+(defun deterred-mpd--migrate--upsert-song-listened (datum db)
+  "Insert DATUM about a listened song in DB.
+
+DATUM is an alist with the following keys:
+- album_artist
+- title
+- album
+- file
+- time, an `iso8601-parse'-able string.
+
+DB is a sqlite connection."
+  (let* ((album-artist (alist-get 'album_artist datum))
+         (album (alist-get 'album datum))
+         (title (alist-get 'title datum))
+         (file (alist-get 'file datum))
+         (time (time-convert
+                (encode-time
+                 (iso8601-parse (alist-get 'time datum)))
+                'integer))
+         (song-id
+          (or
+           (caar (sqlite-select
+                  db "SELECT id FROM mpd_song WHERE file = ?" (list file)))
+           (caar (sqlite-select
+                  db "SELECT id FROM mpd_song
+                      WHERE album_artist = ?
+                        AND title = ?
+                        AND album = ?"
+                  (list album-artist title album))))))
+    (if song-id
+        (sqlite-execute db "INSERT INTO mpd_song_listened (mpd_song_id, timestamp)
+                        VALUES (?, ?)
+                        ON CONFLICT (mpd_song_id, timestamp) DO NOTHING"
+                        (list song-id time))
+      (let ((msg (format "Can't find song for datum %s" datum)))
+        (unless (y-or-n-p (concat msg ". Continue?"))
+          (user-error msg))))))
+
+(defun deterred-mpd-migrate-load-csv (file)
+  "Load a csv FILE with the MPD listen log into DETERRED."
+  (interactive
+   (list
+    (read-file-name "CSV file: " nil nil nil nil
+                    (lambda (f)
+                      (or (file-directory-p f)
+                          (string-match-p (rx ".csv" eos) f))))))
+  ;; Parse CSV line-by-line
+  (let* ((data (pcsv-parse-file file))
+         (header (mapcar #'intern (car data)))
+         (db (deterred-db--init)))
+    (with-sqlite-transaction db
+      (cl-loop
+       with total = (1- (seq-length data))
+       for row in (cdr data)
+       for i from 0
+       for datum = (cl-loop for key in header
+                            for value in row
+                            collect (cons key value))
+       do (deterred-mpd--migrate--upsert-song-listened datum db)
+       do (message "Processed: %s/%s" i total)))))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

@@ -18,6 +18,7 @@ CREATE TABLE mpd_song (
 CREATE TABLE mpd_song_listened (
   mpd_song_id TEXT NOT NULL,
   timestamp INTEGER,
+  hostname TEXT,
   PRIMARY KEY(mpd_song_id, timestamp),
   FOREIGN KEY (mpd_song_id) REFERENCES mpd_song(id)
 ) STRICT;

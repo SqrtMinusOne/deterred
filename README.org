@@ -5,4 +5,7 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 #+begin_src emacs-lisp
 (use-package libmpdel
   :straight t)
+
+(use-package pcsv
+  :straight t)
 #+end_src
