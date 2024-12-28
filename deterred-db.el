@@ -123,12 +123,19 @@ DB is a sqlite database object.  PENDING is a list of migrations."
       db)))
 
 (defun deterred-db--mark-updated (table-name db)
+  (when (symbolp table-name)
+    (setq table-name (symbol-name table-name)))
   (sqlite-execute
    db "INSERT INTO meta_table_updates (table_name, last_updated)
        VALUES (?, unixepoch(CURRENT_TIMESTAMP))
          ON CONFLICT (table_name)
          DO UPDATE SET last_updated = unixepoch(CURRENT_TIMESTAMP)"
    (list table-name)))
+
+(defun deterred-db--mark-update-batch (table-names db)
+  (mapcar (lambda (name) (deterred-db--mark-updated
+                          name db))
+          table-names))
 
 (defun deterred-db--insert-format-values (values attrs)
   (mapconcat

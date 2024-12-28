@@ -44,6 +44,13 @@
   "e6e12255-6b5c-4fed-9e51-c74fc6570ca8")
 
 (defun deterred-wakatime--process-project (day-in-project db)
+  "Get project ID from DAY-IN-PROJECT.
+
+DAY-IN-PROJECT is a structure from the WakaTime dump, containing the
+aggregate of the project activity in a given day.  DB is a SQLite
+object.
+
+Return the project ID."
   (let* ((name (alist-get 'name day-in-project))
          (id (uuidgen-3 deterred-wakatime-uuid-namespace name)))
     (sqlite-execute db "INSERT INTO wakatime_projects (id, name) VALUES (?, ?)
@@ -52,6 +59,7 @@
     id))
 
 (defun deterred-wakatime-load-json (file)
+  "Load Wakatime export FILE into DETERRED."
   (interactive
    (list
     (read-file-name "JSON file: " nil nil nil nil
@@ -94,7 +102,14 @@
                      :conflict-action 'do-nothing)))))
             (alist-get 'projects day))
            (message "Processed: %s" (alist-get 'date day))))
-       (alist-get 'days data)))))
+       (alist-get 'days data))
+      (deterred-db--mark-update-batch
+       (append
+        (mapcar (lambda (f) (format "wakatime_%s" (car f)))
+                deterred-wakatime-key-mappings)
+        (list "wakatime_projects")
+        nil)
+       db))))
 
 (provide 'deterred-wakatime)
 ;;; deterred-wakatime.el ends here
