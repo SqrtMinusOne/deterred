@@ -165,7 +165,10 @@ DB is a sqlite connection."
           (user-error msg))))))
 
 (defun deterred-mpd-migrate-load-csv (file)
-  "Load a csv FILE with the MPD listen log into DETERRED."
+  "Load a csv FILE with the MPD listen log into DETERRED.
+
+The columns of the file have to match the input of
+`deterred-mpd--migrate--upsert-song-listened'."
   (interactive
    (list
     (read-file-name "CSV file: " nil nil nil nil
@@ -185,7 +188,8 @@ DB is a sqlite connection."
                             for value in row
                             collect (cons key value))
        do (deterred-mpd--migrate--upsert-song-listened datum db)
-       do (message "Processed: %s/%s" i total)))))
+       do (message "Processed: %s/%s" i total))
+      (deterred-db--mark-updated "mpd_song_listened"))))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

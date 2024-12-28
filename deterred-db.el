@@ -130,5 +130,59 @@ DB is a sqlite database object.  PENDING is a list of migrations."
          DO UPDATE SET last_updated = unixepoch(CURRENT_TIMESTAMP)"
    (list table-name)))
 
+(defun deterred-db--insert-format-values (values attrs)
+  (mapconcat
+   (lambda (datum)
+     (concat
+      "("
+      (string-join
+       (mapcar (lambda (attr)
+                 (let ((value (alist-get attr datum)))
+                   (cond ((null value) "NULL")
+                         ((integerp value) (number-to-string value))
+                         ((floatp value) (number-to-string value))
+                         ((stringp value) (deterred-db--escape value))
+                         (t (error "Bad type for `deterred-db-insert': %s"
+                                   value)))))
+               attrs)
+       ", ")
+      ")"))
+   values
+   ",\n"))
+
+(defun deterred-db--insert-format-conflict (attrs conflict-attrs conflict-action)
+  (let ((non-conflict-attrs (when conflict-attrs
+                              (seq-difference attrs conflict-attrs))))
+    (concat "ON CONFLICT "
+            (when conflict-attrs
+              (concat
+               "("
+               (string-join (mapcar #'symbol-name conflict-attrs) ",")
+               ") "))
+            (pcase conflict-action
+              ('do-nothing "DO NOTHING")
+              ('do-update (concat "DO UPDATE SET "
+                                  (mapconcat (lambda (a)
+                                               (format "%s=excluded.%s" a a))
+                                             non-conflict-attrs ", ")))
+              (_ (error "Unknown conflict-action: %s" conflict-action))))))
+
+
+(cl-defun deterred-db-insert-unsafe
+    (db &key table-name values attrs conflict-attrs conflict-action)
+  (let* ((attrs (or attrs (mapcar #'car (car values))))
+         (values-query (deterred-db--insert-format-values values attrs))
+         (conflict-query
+          (when conflict-action
+            (deterred-db--insert-format-conflict
+             attrs conflict-attrs conflict-action)))
+         (query (concat "INSERT INTO " (symbol-name table-name)
+                        " (" (mapconcat #'symbol-name attrs ",") ") "
+                        "VALUES "
+                        values-query
+                        " "
+                        conflict-query)))
+    (sqlite-execute db query)))
+
 (provide 'deterred-db)
 ;;; deterred-db.el ends here
