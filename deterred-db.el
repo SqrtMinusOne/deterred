@@ -137,6 +137,15 @@ DB is a sqlite database object.  PENDING is a list of migrations."
                           name db))
           table-names))
 
+(defun deterred-db-execute-trace (db query &optional values)
+  (condition-case err
+      (sqlite-execute db query values)
+    (error
+     (message "Error: %s" err)
+     (message "Query: %s" query)
+     (message "Values: %s" values)
+     (signal (car err) (cdr err)))))
+
 (defun deterred-db--insert-format-values (values attrs)
   (mapconcat
    (lambda (datum)
@@ -174,7 +183,6 @@ DB is a sqlite database object.  PENDING is a list of migrations."
                                              non-conflict-attrs ", ")))
               (_ (error "Unknown conflict-action: %s" conflict-action))))))
 
-
 (cl-defun deterred-db-insert-unsafe
     (db &key table-name values attrs conflict-attrs conflict-action)
   (let* ((attrs (or attrs (mapcar #'car (car values))))
@@ -189,7 +197,7 @@ DB is a sqlite database object.  PENDING is a list of migrations."
                         values-query
                         " "
                         conflict-query)))
-    (sqlite-execute db query)))
+    (deterred-db-execute-trace db query)))
 
 (provide 'deterred-db)
 ;;; deterred-db.el ends here
