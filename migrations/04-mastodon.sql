@@ -23,6 +23,6 @@ CREATE TABLE mastodon_post (
   favourites_count INTEGER NOT NULL,
   content TEXT NOT NULL,
   application TEXT,
-  is_reply BOOLEAN NOT NULL,
+  is_reply INTEGER NOT NULL,
   PRIMARY KEY (id)
-);
+) STRICT;
