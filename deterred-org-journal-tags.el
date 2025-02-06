@@ -64,7 +64,7 @@ DB is the sqlite database object, used to determine the timezones."
                            (org-journal-tag-reference-time ref)))
          (local-offset (car (current-time-zone)))
          (target-offset (deterred-locations-offset-at
-                         local-timestamp db))
+                         local-timestamp nil db))
          (timestamp (- local-timestamp (- target-offset local-offset)))
          (id (uuidgen-3 deterred-org-journal-tags-uuid-namespace
                         (number-to-string timestamp)))

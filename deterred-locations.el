@@ -54,17 +54,27 @@
    :values `(((location_id . ,location-id)
               (timestamp . ,timestamp)))))
 
-(defun deterred-locations-offset-at (timestamp &optional db)
+(defun deterred-locations-offset-at (timestamp &optional hostname db)
   "Return timezone offset at TIMESTAMP.
+
+HOSTNAME is an optional parameter to process hostnames with known
+timezones.
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
-         (timezone (caar (sqlite-select
-                          db "SELECT timezone FROM location l
+         timezone)
+    (when hostname
+      (setq timezone (caar (sqlite-select
+                            db "SELECT timezone FROM location_static_hostnames
+                                WHERE hostname = ?"
+                            (list hostname)))))
+    (unless timezone
+      (setq timezone (caar (sqlite-select
+                            db "SELECT timezone FROM location l
                         INNER JOIN location_times lt ON l.id = lt.location_id
                         WHERE lt.timestamp <= ?
                         ORDER BY lt.timestamp DESC LIMIT 1"
-                          (list timestamp)))))
+                            (list timestamp)))))
     (unless timezone
       (error "No timezone found for timestamp %s" timestamp))
     (* 60 60 timezone)))
