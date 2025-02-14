@@ -185,6 +185,18 @@ DB is a sqlite database object.  PENDING is a list of migrations."
 
 (cl-defun deterred-db-insert-unsafe
     (db &key table-name values attrs conflict-attrs conflict-action)
+  "Unsafely insert VALUES into DB.
+
+VALUES have to be a list of alists, where the keys are column names.
+
+DB is the sqlite database object, TABLE-NAME is the name of the target
+table.  The remaining keys are optional.
+
+ATTRS is the list of column names; if not given, the keys of the first
+items in VALUES.
+
+CONFLICT-ACTION can be \\='do-nothing or \\='do-update.  If the
+latter, CONFLICT-ATTRS is also required."
   (let* ((attrs (or attrs (mapcar #'car (car values))))
          (values-query (deterred-db--insert-format-values values attrs))
          (conflict-query
