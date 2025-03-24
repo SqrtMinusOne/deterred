@@ -51,7 +51,7 @@ I set this to \"Emacs\" because this usually means EXWM for me."
 
 EVENTS is a list of events from the ActivityWatch API."
   (let ((db (deterred-db--init))
-        values notafk-start)
+        values)
     (unless (seq-empty-p events)
       (cl-mapc
        (lambda (event)
@@ -60,28 +60,31 @@ EVENTS is a list of events from the ActivityWatch API."
                             (iso8601-parse
                              (alist-get 'timestamp event)))
                            'integer)))
-           (if (equal (alist-get 'status (alist-get 'data event)) "not-afk")
-               (setq notafk-start timestamp)
+           (when (equal (alist-get 'status (alist-get 'data event)) "not-afk")
              (push `((hostname . ,hostname)
-                     (notafk_start_timestamp . ,notafk-start)
-                     (notafk_end_timestamp . ,timestamp))
+                     (notafk_start_timestamp . ,timestamp)
+                     (notafk_end_timestamp . ,(round (+ timestamp (alist-get 'duration event)))))
                    values))))
        (seq-sort-by
         (lambda (event)
           (alist-get 'timestamp event))
         #'string-lessp
         events))
-      (with-sqlite-transaction db
-        (deterred-db-insert-unsafe
-         db :table-name 'activitywatch_notafk_period
-         :values values
-         :conflict-action 'do-nothing
-         :conflict-attrs '(hostname notafk_start_timestamp notafk_end_timestamp))
-        (deterred-db--mark-updated 'activitywatch_notafk_period db))
+      (when values
+        (with-sqlite-transaction db
+          (deterred-db-insert-unsafe
+           db :table-name 'activitywatch_notafk_period
+           :values values
+           :conflict-action 'do-nothing
+           :conflict-attrs '(hostname notafk_start_timestamp notafk_end_timestamp))
+          (deterred-db--mark-updated db 'activitywatch_notafk_period)))
       (message "Saved %d not-AFK periods from %s" (length values) hostname))))
 
-(defun deterred-activitywatch--bucket-load-afk (bucket-id hostname)
-  "Parse AFK BUCKET-ID for HOSTNAME in DETERRED."
+(defun deterred-activitywatch--bucket-load-afk (bucket-id hostname &optional callback)
+  "Parse AFK BUCKET-ID for HOSTNAME in DETERRED.
+
+Call CALLBACK on success.  This is necessary because other bucket
+loading logic might depend on the AFK bucket."
   (let* ((db (deterred-db--init))
          (start (caar
                  (sqlite-select
@@ -89,14 +92,31 @@ EVENTS is a list of events from the ActivityWatch API."
                       FROM activitywatch_notafk_period"))))
     (request (concat deterred-activitywatch-api "/0/buckets/" bucket-id "/events")
       :parser 'json-read
-      :params (when start `(("start" . ,(format-time-string "%Y-%m-%dT%H:%M:%S" start))))
+      :params (when start
+                `(("start" .            ; Some overlap to be sure
+                   ,(format-time-string "%Y-%m-%dT%H:%M:%S"
+                                        (- start (* 60 60 24)) t))))
       :encoding 'utf-8
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
-                  (deterred-activitywatch--bucket-store-afk data hostname)))
+                  (deterred-activitywatch--bucket-store-afk data hostname)
+                  (when callback
+                    (funcall callback))))
       :error (cl-function
               (lambda (&key error-thrown &allow-other-keys)
                 (message "Error!: %S" error-thrown))))))
+
+(defun deterred-activitywatch--bucket-load-afk-recursive (buckets callback)
+  "Recursively load afk BUCKETS and call CALLBACK when done."
+  (if buckets
+      (let ((bucket (car buckets)))
+        (deterred-activitywatch--bucket-load-afk
+         (alist-get 'id (cdr bucket))
+         (alist-get 'hostname (cdr bucket))
+         (lambda ()
+           (deterred-activitywatch--bucket-load-afk-recursive
+            (cdr buckets) callback))))
+    (funcall callback)))
 
 (defun deterred-activitywatch--load-currentwindow-get-days (db hostname created-at)
   "Get the list of ActivityWatch days to parse.
@@ -154,34 +174,109 @@ decoded time form.  HOSTNAME is the hostname."
     (cons (format-time-string "%FT%T%z" (encode-time start-day) t)
           (format-time-string "%FT%T%z" (encode-time end-day) t))))
 
-(defun deterred-activitywatch--bucket-store-currentday (db day hostname events)
+(defun deterred-activitywatch--bucket-process-currentwindow-afk (db hostname events)
+  "Add AFK data to currentwindow EVENTS and transform them.
+
+Return a list of cons cells, where car is the timestamp, and cdr is
+one of:
+- afk-start (symbol)
+- afk-end (symbol)
+- a string with the active program name.
+
+HOSTNAME is the hostname.  DB is the sqlite database object."
+  (let* ((events-data
+          (seq-sort-by
+           #'car #'<
+           (mapcar
+            (lambda (event)
+              (let ((timestamp (time-convert
+                                (encode-time
+                                 (iso8601-parse (alist-get 'timestamp event)))
+                                'integer))
+                    (app (alist-get 'app (alist-get 'data event))))
+                (cons
+                 timestamp
+                 (if (and (equal app "unknown")
+                          deterred-activitywatch-convert-unknown)
+                     deterred-activitywatch-convert-unknown
+                   app))))
+            events)))
+         (afk-data
+          (mapcan
+           (lambda (datum)
+             (list (cons (nth 0 datum) 'notafk-start)
+                   (cons (nth 1 datum) 'notafk-end)))
+           (sqlite-select
+            db
+            "SELECT notafk_start_timestamp, notafk_end_timestamp
+             FROM activitywatch_notafk_period
+             WHERE hostname = ? AND notafk_end_timestamp >= ?
+              AND notafk_start_timestamp <= ?"
+            (list hostname (caar events-data) (caar (last events-data))))))
+         (all-data
+          (seq-sort-by #'car #'< (append events-data afk-data))))
+    (cl-loop with active-notafk = nil
+             for datum in all-data
+             if (stringp (cdr datum)) collect datum
+             else if (and (null active-notafk) (eq (cdr datum) 'notafk-start))
+             do (setq active-notafk t) and collect datum
+             else if (and active-notafk (eq (cdr datum) 'notafk-end))
+             do (setq active-notafk nil) and collect datum)))
+
+(defun deterred-activitywatch--bucket-process-currentwindow (db hostname events)
+  "Group activitywatch currentwindow EVENTS.
+
+This accounts for AFK data using
+`deterred-activitywatch--bucket-process-currentwindow-afk'.
+
+Return a hash map with app names with keys and total non-AFK seconds
+spent there as values.
+
+HOSTNAME is the hostname.  DB is the sqlite database object."
+  (let ((data (deterred-activitywatch--bucket-process-currentwindow-afk
+               db hostname events))
+        (group-data (make-hash-table :test #'equal))
+        active-notafk active-datum)
+    (dolist (datum data)
+      (cond
+       ((eq (cdr datum) 'notafk-start)
+        (setq active-notafk t)
+        (when active-datum
+          (setq active-datum
+                (cons (car datum) (cdr active-datum)))))
+       ((eq (cdr datum) 'notafk-end)
+        (setq active-notafk nil)
+        (when active-datum
+          (puthash (cdr active-datum)
+                   (+ (- (car datum) (car active-datum))
+                      (gethash (cdr active-datum) group-data 0))
+                   group-data)
+          (setq active-datum nil)))
+       ((stringp (cdr datum))
+        ;; Ich bin immer noch hier
+        (when (and active-notafk active-datum)
+          (puthash (cdr active-datum)
+                   (+ (- (car datum) (car active-datum))
+                      (gethash (cdr active-datum) group-data 0))
+                   group-data))
+        (setq active-datum datum))))
+    group-data))
+
+(defun deterred-activitywatch--bucket-store-currentwindow (db day hostname events)
   "Save ActivityWatch current windows EVENTS on DAY to DB.
 
 DB is the sqlite database object.  DAY is the day in decoded time
 form.  HOSTNAME is the hostname.  EVENTS is the list of events, as
 returned by the ActivityWatch API."
   (let ((data
-         (thread-last
-           events
-           (seq-group-by
-            (lambda (event)
-              (let ((app (alist-get 'app (alist-get 'data event))))
-                (if (and (equal app "unknown")
-                         deterred-activitywatch-convert-unknown)
-                    deterred-activitywatch-convert-unknown
-                  app))))
-           (mapcar
-            (lambda (events)
-              (cons (car events)
-                    (apply
-                     #'+ (mapcar (lambda (event) (alist-get 'duration event))
-                                 (cdr events))))))
-           (seq-sort-by #'cdr #'>)
-           (mapcar (lambda (datum)
-                     `((hostname . ,hostname)
-                       (day . ,(format-time-string "%F" (encode-time day)))
-                       (app . ,(car datum))
-                       (total_duration . ,(cdr datum))))))))
+         (cl-loop for app being the hash-keys of
+                  (deterred-activitywatch--bucket-process-currentwindow
+                   db hostname events)
+                  using (hash-values duration)
+                  collect `((hostname . ,hostname)
+                            (day . ,(format-time-string "%F" (encode-time day)))
+                            (app . ,app)
+                            (total_duration . ,duration)))))
     (when data
       (with-sqlite-transaction db
         (deterred-db-insert-unsafe
@@ -220,7 +315,7 @@ convinience).  Used internally for recursion."
       :encoding 'utf-8
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
-                  (deterred-activitywatch--bucket-store-currentday
+                  (deterred-activitywatch--bucket-store-currentwindow
                    db day hostname data)
                   (deterred-activitywatch--load-currentwindow
                    bucket-id hostname nil (cdr days))))
@@ -236,18 +331,23 @@ convinience).  Used internally for recursion."
     :encoding 'utf-8
     :success (cl-function
               (lambda (&key data &allow-other-keys)
-                (dolist (bucket data)
-                  (pcase (alist-get 'type (cdr bucket))
-                    ("afkstatus"
-                     (deterred-activitywatch--bucket-load-afk
-                      (alist-get 'id (cdr bucket))
-                      (alist-get 'hostname (cdr bucket))))
-                    ("currentwindow"
-                     (deterred-activitywatch--load-currentwindow
-                      (alist-get 'id (cdr bucket))
-                      (alist-get 'hostname (cdr bucket))
-                      (alist-get 'created (cdr bucket))))
-                    (_ nil)))))
+                ;; Load AFK buckets
+                (deterred-activitywatch--bucket-load-afk-recursive
+                 (seq-filter
+                  (lambda (bucket)
+                    (equal (alist-get 'type (cdr bucket))
+                           "afkstatus"))
+                  data)
+                 ;; Load the dependent buckets
+                 (lambda ()
+                   (dolist (bucket data)
+                     (pcase (alist-get 'type (cdr bucket))
+                       ("currentwindow"
+                        (deterred-activitywatch--load-currentwindow
+                         (alist-get 'id (cdr bucket))
+                         (alist-get 'hostname (cdr bucket))
+                         (alist-get 'created (cdr bucket))))
+                       (_ nil)))))))
     :error (cl-function
             (lambda (&key error-thrown &allow-other-keys)
               (message "Error!: %S" error-thrown)))))
