@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'calendar)
 (require 'cl-lib)
 
 (defconst deterred-locations-uuid-namespace
@@ -54,6 +55,65 @@
    :values `(((location_id . ,location-id)
               (timestamp . ,timestamp)))))
 
+(defun deterred-locations--dst-offset-hours (timestamp dst-mode)
+  "Calculate DST offset at TIMESTAMP.
+
+DST-MODE is either \"EU\", \"RU\", or nil."
+  (let* ((time (decode-time timestamp))
+         (year (decoded-time-year time))
+         (month (decoded-time-month time))
+         (last-sun-march (calendar-nth-named-day -1 0 3 year))
+         (last-sun-oct (calendar-nth-named-day -1 0 10 year))
+         (dst-start
+          (encode-time 0 0 1 (nth 1 last-sun-march) 3 year))
+         (dst-end (encode-time 0 0 1 (nth 1 last-sun-oct) 10 year)))
+    (pcase dst-mode
+      ("EU"
+       (cond
+        ((> year 2024) 0)
+        ((and (time-less-p dst-start (encode-time time))
+              (time-less-p (encode-time time) dst-end))
+         1)
+        (t 0)))
+      ("RU"
+       (cond
+        ((> year 2015) 0)
+        ((> year 2010) 1)
+        ((and (time-less-p dst-start (encode-time time))
+              (time-less-p (encode-time time) dst-end))
+         1)
+        (t 0)))
+      ('nil 0)
+      (_ (error "Unknown DST mode: %s" dst-mode)))))
+
+(defun deterred-locations-locate-at (db timestamp)
+  "Return location info at TIMESTAMP.
+
+TIMESTAMP is a UNIX timestamp.  DB is the sqlite database object.
+
+The return value is an alist with the following keys:
+- name
+- lat
+- lon
+- timezone
+- dst-mode
+
+\"timezone\" is adjusted for DST."
+  (let ((raw-data (car (sqlite-select
+                        db "SELECT name, latitude, longitude, timezone, dst_mode FROM location l
+                   INNER JOIN location_times lt ON l.id = lt.location_id
+                   WHERE lt.timestamp <= ?
+                   ORDER BY lt.timestamp DESC LIMIT 1"
+                        (list timestamp)))))
+    (unless raw-data
+      (error "No location data found for timestamp %s" timestamp))
+    (let* ((data (deterred-db-list-to-alist raw-data '(name lat lon timezone dst-mode)))
+           (dst-hours (deterred-locations--dst-offset-hours
+                       timestamp (alist-get 'dst-mode data))))
+      (setf (alist-get 'timezone data)
+            (+ (alist-get 'timezone data) dst-hours))
+      data)))
+
 (defun deterred-locations-offset-at (timestamp &optional hostname db)
   "Return timezone offset at TIMESTAMP.
 
@@ -62,19 +122,15 @@ timezones.
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
-         timezone)
+         timezone dst-mode)
     (when hostname
       (setq timezone (caar (sqlite-select
                             db "SELECT timezone FROM location_static_hostnames
                                 WHERE hostname = ?"
                             (list hostname)))))
     (unless timezone
-      (setq timezone (caar (sqlite-select
-                            db "SELECT timezone FROM location l
-                        INNER JOIN location_times lt ON l.id = lt.location_id
-                        WHERE lt.timestamp <= ?
-                        ORDER BY lt.timestamp DESC LIMIT 1"
-                            (list timestamp)))))
+      (let ((data (deterred-locations-locate-at db timestamp)))
+        (setq timezone (alist-get 'timezone data))))
     (unless timezone
       (error "No timezone found for timestamp %s" timestamp))
     (* 60 60 timezone)))
