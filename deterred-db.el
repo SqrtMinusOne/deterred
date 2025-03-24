@@ -122,7 +122,11 @@ DB is a sqlite database object.  PENDING is a list of migrations."
        db (deterred-db--migrations-get-pending db))
       db)))
 
-(defun deterred-db--mark-updated (table-name db)
+(defun deterred-db--mark-updated (db table-name)
+  "Mark TABLE-NAME as updated.
+
+TABLE-NAME is either string or symbol.  DB is the sqlite database
+object."
   (when (symbolp table-name)
     (setq table-name (symbol-name table-name)))
   (sqlite-execute
@@ -132,12 +136,19 @@ DB is a sqlite database object.  PENDING is a list of migrations."
          DO UPDATE SET last_updated = unixepoch(CURRENT_TIMESTAMP)"
    (list table-name)))
 
-(defun deterred-db--mark-update-batch (table-names db)
+(defun deterred-db--mark-update-batch (db table-names)
+  "Mark TABLE-NAMES as updated.
+
+TABLE-NAMES is a list of strings or symbols.  DB is the sqlite
+database object."
   (mapcar (lambda (name) (deterred-db--mark-updated
-                          name db))
+                          db name))
           table-names))
 
 (defun deterred-db-execute-trace (db query &optional values)
+  "Excecute SQLite query and throw a detailed error.
+
+DB, QUERY and VALUES are the same as `sqlite-execute'."
   (condition-case err
       (sqlite-execute db query values)
     (error
@@ -146,20 +157,26 @@ DB is a sqlite database object.  PENDING is a list of migrations."
      (message "Values: %s" values)
      (signal (car err) (cdr err)))))
 
+(defun deterred-db--format-value (value)
+  "Format VALUE for use in SQLite queries.  Unsafe."
+  (cond ((null value) "NULL")
+        ((integerp value) (number-to-string value))
+        ((floatp value) (number-to-string value))
+        ((stringp value) (deterred-db--escape value))
+        (t (error "Bad type for `deterred-db--format-value': %s"
+                  value))))
+
 (defun deterred-db--insert-format-values (values attrs)
+  "Format VALUES for use in SQLite insert query.  Unsafe.
+
+ATTRS is the list of attributes."
   (mapconcat
    (lambda (datum)
      (concat
       "("
       (string-join
        (mapcar (lambda (attr)
-                 (let ((value (alist-get attr datum)))
-                   (cond ((null value) "NULL")
-                         ((integerp value) (number-to-string value))
-                         ((floatp value) (number-to-string value))
-                         ((stringp value) (deterred-db--escape value))
-                         (t (error "Bad type for `deterred-db-insert': %s"
-                                   value)))))
+                 (deterred-db--format-value (alist-get attr datum)))
                attrs)
        ", ")
       ")"))
@@ -167,6 +184,11 @@ DB is a sqlite database object.  PENDING is a list of migrations."
    ",\n"))
 
 (defun deterred-db--insert-format-conflict (attrs conflict-attrs conflict-action)
+  "Format an on conflict clause for SQLite insert query.
+
+ATTRS is the list of all attributes, CONFLICT-ATTRS is the subset of
+ATTRS on which the conflict is checked, CONFLICT-ACTION is either
+\\='do-nothing and \\='do-update."
   (let ((non-conflict-attrs (when conflict-attrs
                               (seq-difference attrs conflict-attrs))))
     (concat "ON CONFLICT "
@@ -210,6 +232,25 @@ latter, CONFLICT-ATTRS is also required."
                         " "
                         conflict-query)))
     (deterred-db-execute-trace db query)))
+
+(defun deterred-db-cleanup-unsafe (db table-name id-attr ids)
+  "Delete records from TABLE-NAME with ids not in IDS.
+
+ID-ATTR is the name of ID attribute, DB is the sqlite database
+object."
+  (let* ((table-name (if (symbolp table-name) (symbol-name table-name) table-name))
+         (id-attr (if (symbolp id-attr) (symbol-name id-attr) id-attr))
+         (q (format "DELETE FROM %s WHERE %s NOT IN (%s)"
+                    table-name id-attr
+                    (mapconcat #'deterred-db--format-value ids ", "))))
+    (sqlite-execute db q)))
+
+(defmacro deterred-db-list-to-alist (list-var fields)
+  "Convert a list LIST-VAR to an alist based on FIELDS.
+FIELDS is a list of symbols that will be used as keys."
+  `(cl-loop for field in ,fields
+            for i from 0
+            collect (cons field (nth i ,list-var))))
 
 (provide 'deterred-db)
 ;;; deterred-db.el ends here

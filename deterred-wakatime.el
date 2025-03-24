@@ -104,12 +104,12 @@ Return the project ID."
            (message "Processed: %s" (alist-get 'date day))))
        (alist-get 'days data))
       (deterred-db--mark-update-batch
+       db
        (append
         (mapcar (lambda (f) (format "wakatime_%s" (car f)))
                 deterred-wakatime-key-mappings)
         (list "wakatime_projects")
-        nil)
-       db))))
+        nil)))))
 
 (provide 'deterred-wakatime)
 ;;; deterred-wakatime.el ends here

@@ -129,8 +129,8 @@ DB is the sqlite database object, used to determine the timezones."
        :conflict-action 'do-nothing
        :conflict-attrs '(record_id tag_id))
       (deterred-db--mark-update-batch
-       '(org_journal_record org_journal_tag org_journal_record_tag)
-       db))))
+       db
+       '(org_journal_record org_journal_tag org_journal_record_tag)))))
 
 (provide 'deterred-org-journal-tags)
 ;;; deterred-org-journal-tags.el ends here

@@ -95,8 +95,8 @@
          :values post-mentions
          :conflict-action 'do-nothing)
         (deterred-db--mark-update-batch
-         '(mastodon_post mastodon_account mastodon_post_mention)
-         db)))
+         db
+         '(mastodon_post mastodon_account mastodon_post_mention))))
     max-id))
 
 (defun deterred-mastodon-sync (server account-id &optional max-id)

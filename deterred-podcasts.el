@@ -121,7 +121,7 @@ FILE is the path to the database."
     (with-sqlite-transaction db
       (deterred-podcasts--antennapod-load-listened db antennapod-db)
       (deterred-db--mark-update-batch
-       '(podcasts_listened podcasts_feed) db))))
+       db '(podcasts_listened podcasts_feed)))))
 
 (provide 'deterred-podcasts)
 ;;; deterred-podcasts.el ends here
