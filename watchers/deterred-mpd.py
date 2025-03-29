@@ -5,11 +5,11 @@ import socket
 import sqlite3
 import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timedelta
 
-
-MPD_NAMESPACE = uuid.UUID('c66d74fc-c243-4d8e-9e0a-72a88b78132b')
+MPD_NAMESPACE = uuid.UUID("c66d74fc-c243-4d8e-9e0a-72a88b78132b")
 
 
 def parse_args():
@@ -192,16 +192,29 @@ def wait_for_mpd():
     subprocess.run(["mpc", "idle", "player"])
 
 
+def try_connect_to_mpd():
+    countdown = 10
+    while True:
+        status = get_mpd_status()
+        if "error" in status:
+            print(f"Cannot connect to MPD [{countdown}/10]: {status}")
+            countdown -= 1
+            time.sleep(5)
+        else:
+            return
+
+
 if __name__ == "__main__":
     get_lock("deterred_mpd")
 
     args = parse_args()
     current_status = None
+    try_connect_to_mpd()
     while True:
         status = get_mpd_status()
         print(status)
 
-        if status['state'] == 'stopped':
+        if status["state"] == "stopped":
             status = None
 
         if not current_status and status:
