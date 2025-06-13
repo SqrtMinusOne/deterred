@@ -132,5 +132,31 @@ DB is the sqlite database object, used to determine the timezones."
        db
        '(org_journal_record org_journal_tag org_journal_record_tag)))))
 
+(defclass deterred-org-journal-tags (deterred-source)
+  ((name :initform "Org Journal"))
+  "DETERRED source for org-journal-tags.")
+
+(cl-defmethod deterred-source-range ((_source deterred-org-journal-tags) &optional db)
+  "Get the data availability range for Mastodon.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM org_journal_record")))
+    (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-sync ((_source deterred-org-journal-tags)
+                                    &optional callback)
+  "Sync DETERRED with org-journal-tags.
+
+Call CALLBACK when done."
+  (deterred-org-journal-tags-load)
+  (when callback
+    (funcall callback)))
+
 (provide 'deterred-org-journal-tags)
 ;;; deterred-org-journal-tags.el ends here

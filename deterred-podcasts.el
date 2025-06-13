@@ -123,5 +123,30 @@ FILE is the path to the database."
       (deterred-db--mark-update-batch
        db '(podcasts_listened podcasts_feed)))))
 
+(defclass deterred-podcasts (deterred-source)
+  ((name :initform "Podcasts"))
+  "DETERRED source for podcasts.")
+
+(cl-defmethod deterred-source-range ((_source deterred-podcasts) &optional db)
+  "Get the data availability range for Mastodon.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM podcasts_listened")))
+    (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-actions ((_source deterred-podcasts) &optional callback)
+  "Run an action for the podcasts source.
+
+Run CALLBACK when done."
+  (deterred-source--actions-pick
+   '(("Load AntennaPod DB" deterred-podcasts-load-antennapod nil))
+   callback))
+
 (provide 'deterred-podcasts)
 ;;; deterred-podcasts.el ends here

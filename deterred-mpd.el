@@ -222,5 +222,22 @@ The columns of the file have to match the input of
           (nth 1 update-datum)
           (nth 0 update-datum)))))))
 
+(defclass deterred-mpd (deterred-source)
+  ((name :initform "Music (MPD)"))
+  "DETERRED source for mpd.")
+
+(cl-defmethod deterred-source-range ((_source deterred-mpd) &optional db)
+  "Get the data availability range for MPD.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM mpd_song_listened")))
+    (cons (caar data) (cadar data))))
+
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

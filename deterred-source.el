@@ -68,12 +68,39 @@ Call CALLBACK."
     #'cl--generic-method-specializers
     (cl--generic-method-table (cl--generic #'deterred-source-sync)))))
 
-(cl-defgeneric deterred-source-sync-auto-p (source)
-  "If non-nil, can sync SOURCE without user intervention.")
+(cl-defgeneric deterred-source-actions (source &optional callback)
+  "Dispatch actions on SOURCE.
 
-(cl-defmethod deterred-source-sync-auto-p ((source deterred-source))
-  "If non-nil, can sync SOURCE without user intervention."
-  (deterred-source-sync-p source))
+Call CALLBACK when done.")
+
+(cl-defmethod deterred-source-actions-p ((source deterred-source))
+  "Return non-nil if SOURCE can dispatcher actions."
+  (member
+   (list (type-of source))
+   (mapcar
+    #'cl--generic-method-specializers
+    (cl--generic-method-table (cl--generic #'deterred-source-actions)))))
+
+(defun deterred-source--actions-pick (action-table &optional callback)
+  "Prompt the user with ACTION-TABLE and execute the pick.
+
+ACTION-TABLE is a list of lists with the following items:
+- action name
+- function
+- whether to pass CALLBACK as the first argument."
+  (let* ((action-name (completing-read "Pick action: " action-table))
+         (action-value (alist-get action-name action-table nil nil #'equal))
+         (action-fn (nth 0 action-value))
+         (action-callback (nth 1 action-value)))
+    (unless action-value
+      (user-error "Action %s not found" action-name))
+    (if action-callback
+        (funcall action-fn callback)
+      (if (commandp action-fn)
+          (call-interactively action-fn)
+        (funcall action-fn)
+        (when callback
+          (funcall callback))))))
 
 (provide 'deterred-source)
 ;;; deterred-source.el ends here

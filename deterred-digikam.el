@@ -123,7 +123,7 @@ I think."
        db (nth 0 data) (nth 1 data)))))
 
 (defclass deterred-digikam (deterred-source)
-  ((name :initform "Photos (Digikam)")
+  ((name :initform "Photos (digikam)")
    (warn-days :initform 7)
    (digikam-db :initarg :digikam-db))
   "DETERRED source for digikam.")

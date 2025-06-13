@@ -104,13 +104,12 @@ No idea what I'm doing wrong, but this seems to help."
       (dolist (source deterred-sources)
         (let* ((range (deterred-source-range source))
                (can-sync (deterred-source-sync-p source))
+               (can-action (deterred-source-actions-p source))
                (warn-days (oref source warn-days))
                (unsynced-days (floor
                                (/ (float (- (time-convert nil #'integer)
                                             (cdr range)))
-                                  (* 60 60 24))))
-               (can-sync (deterred-source-sync-p source))
-               (can-sync-auto (deterred-source-sync-auto-p source)))
+                                  (* 60 60 24)))))
           (insert
            (format "%s  %s - %s"
                    (propertize
@@ -137,7 +136,18 @@ No idea what I'm doing wrong, but this seems to help."
                                         (message "Sync done: %s"
                                                  (oref source name))
                                         (deterred-dispatcher-refresh))))
-                           (concat "[Sync" (unless can-sync-auto "...") "]")))
+                           "[Sync]"))
+          (when can-action
+            (insert " ")
+            (widget-create 'push-button
+                           :notify (lambda (&rest _)
+                                     (deterred-source-actions
+                                      source
+                                      (lambda ()
+                                        (message "Action done: %s"
+                                                 (oref source name))
+                                        (deterred-dispatcher-refresh))))
+                           "[Actions...]"))
           (insert "\n"))))))
 
 (defun deterred-dispatcher--render-contents ()

@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-source)
 (require 'cl-lib)
 
 (defconst deterred-messengers-uuid-namespace
@@ -144,6 +145,30 @@ dump."
        db
        '(messenger_chat messenger_user messenger_message)))))
 
+(defclass deterred-messengers (deterred-source)
+  ((name :initform "Messengers"))
+  "DETERRED source for messengers.")
+
+(cl-defmethod deterred-source-range ((_source deterred-messengers) &optional db)
+  "Get the data availability range for Mastodon.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM messenger_message")))
+    (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-actions ((_source deterred-messengers) &optional callback)
+  "Run an action for the messengers source.
+
+Run CALLBACK when done."
+  (deterred-source--actions-pick
+   '(("Load Telegram JSON" deterred-messengers-load-telegram-json nil))
+   callback))
 
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
