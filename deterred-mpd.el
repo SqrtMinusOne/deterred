@@ -143,7 +143,7 @@ DB is a sqlite connection."
          (file (alist-get 'file datum))
          (time (time-convert
                 (encode-time
-                 (iso8601-parse (alist-get 'time datum)))
+                 (iso8601-parse (string-replace " " "T" (alist-get 'time datum))))
                 'integer))
          (song-id
           (or
@@ -190,6 +190,37 @@ The columns of the file have to match the input of
        do (deterred-mpd--migrate--upsert-song-listened datum db)
        do (message "Processed: %s/%s" i total))
       (deterred-db--mark-updated db "mpd_song_listened"))))
+
+(defun deterred-mpd-migrate-fix-timestamp ()
+  (interactive)
+  (user-error "Don't call this!!!")
+  (let* ((db (deterred-db--init))
+         (data (sqlite-select
+                db "SELECT mpd_song_id, timestamp FROM mpd_song_listened
+                    ORDER BY timestamp"))
+         (default-offset (* 3 60 60))
+         (update-data (cl-loop
+                       with len = (length data)
+                       for datum in data
+                       for i from 0
+                       for offset = (deterred-locations-offset-at (nth 1 datum) nil db)
+                       if (not (= offset default-offset))
+                       collect (list
+                                (nth 0 datum)
+                                (nth 1 datum)
+                                (+ (nth 1 datum) (- offset) default-offset))
+                       if (= (% i 100) 0)
+                       do (message "Processed %d/%d" i len))))
+    (with-sqlite-transaction db
+      (dolist (update-datum update-data)
+        (sqlite-execute
+         db "UPDATE mpd_song_listened
+             SET timestamp = ?
+             WHERE timestamp = ? AND mpd_song_id = ?"
+         (list
+          (nth 2 update-datum)
+          (nth 1 update-datum)
+          (nth 0 update-datum)))))))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

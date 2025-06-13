@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-source)
 (require 'deterred-locations)
 (require 'cl-lib)
 
@@ -120,6 +121,36 @@ I think."
     (let ((data (deterred-digikam--get-data db digikam-db)))
       (deterred-digikam-store
        db (nth 0 data) (nth 1 data)))))
+
+(defclass deterred-digikam (deterred-source)
+  ((name :initform "Photos (Digikam)")
+   (warn-days :initform 7)
+   (digikam-db :initarg :digikam-db))
+  "DETERRED source for digikam.")
+
+(cl-defmethod deterred-source-range ((_source deterred-digikam) &optional db)
+  "Get the data availability range for ActivityWatch.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM digikam_photo")))
+    (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-sync ((source deterred-digikam) &optional callback)
+  "Sync DETERRED with digikam.
+
+Call CALLBACK when done.
+
+SOURCE is an instance of `deterred-digikam'."
+  (unless (oref source digikam-db)
+    (user-error "No digikam-db file set"))
+  (deterred-digikam-load (oref source digikam-db))
+  (when callback (funcall callback)))
 
 (provide 'deterred-digikam)
 ;;; deterred-digikam.el ends here

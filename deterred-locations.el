@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-source)
 (require 'calendar)
 (require 'cl-lib)
 
@@ -134,6 +135,24 @@ DB is the sqlite database object."
     (unless timezone
       (error "No timezone found for timestamp %s" timestamp))
     (* 60 60 timezone)))
+
+(defclass deterred-locations (deterred-source)
+  ((name :initform "Locations")
+   (warn-days :initform nil))
+  "DETERRED source for locations.")
+
+(cl-defmethod deterred-source-range ((_source deterred-locations) &optional db)
+  "Get the data availability range for locations.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM location_times")))
+    (cons (caar data) (cadar data))))
 
 (provide 'deterred-locations)
 ;;; deterred-locations.el ends here

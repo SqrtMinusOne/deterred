@@ -161,6 +161,5 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
    (expand-file-name deterred-db-backups-location)
    deterred-backup-keep))
 
-
 (provide 'deterred-backup)
 ;;; deterred-backup.el ends here

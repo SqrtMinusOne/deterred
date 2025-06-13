@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-locations)
+(require 'deterred-source)
 (require 'request)
 (require 'cl-lib)
 
@@ -287,7 +288,7 @@ returned by the ActivityWatch API."
          :conflict-attrs '(day hostname app))))))
 
 (defun deterred-activitywatch--load-currentwindow
-    (bucket-id hostname &optional created-at days)
+    (bucket-id hostname &optional created-at callback days)
   "Load data from ActivityWatch's currentwindow BUCKET-ID on DAYS.
 
 This is a recursive function.
@@ -297,60 +298,105 @@ HOSTNAME is the hostname.
 CREATED-AT is the bucket creation date in the ISO8601 format (as
 returned by the ActivityWatch API).  Only use it on the first pass.
 
+If CALLBACK is non-nil, call it when the sync is done.
+
 DAYS is a list of decoded times (as returned by `iso8601-parse' for
 convinience).  Used internally for recursion."
-  (when-let* ((db (deterred-db--init))
-              (days (or days
-                        (when created-at
-                          (deterred-activitywatch--load-currentwindow-get-days
-                           db hostname created-at))))
-              (day (car days))
-              (border (deterred-activitywatch--get-borders db day hostname)))
-    (message "Saving ActivityWatch day: %s" (format-time-string "%F" (encode-time day)))
-    (request (concat deterred-activitywatch-api "/0/buckets/"
-                     bucket-id "/events")
-      :parser 'json-read
-      :params `(("start" . ,(car border))
-                ("end" . ,(cdr border)))
-      :encoding 'utf-8
-      :success (cl-function
-                (lambda (&key data &allow-other-keys)
-                  (deterred-activitywatch--bucket-store-currentwindow
-                   db day hostname data)
-                  (deterred-activitywatch--load-currentwindow
-                   bucket-id hostname nil (cdr days))))
-      :error (cl-function
-              (lambda (&key error-thrown &allow-other-keys)
-                (message "Error!: %S" error-thrown))))))
+  (if-let* ((db (deterred-db--init))
+            (days (or days
+                      (when created-at
+                        (deterred-activitywatch--load-currentwindow-get-days
+                         db hostname created-at))))
+            (day (car days))
+            (border (deterred-activitywatch--get-borders db day hostname)))
+      (progn
+        (message "Saving ActivityWatch day: %s" (format-time-string "%F" (encode-time day)))
+        (request (concat deterred-activitywatch-api "/0/buckets/"
+                         bucket-id "/events")
+          :parser 'json-read
+          :params `(("start" . ,(car border))
+                    ("end" . ,(cdr border)))
+          :encoding 'utf-8
+          :success (cl-function
+                    (lambda (&key data &allow-other-keys)
+                      (deterred-activitywatch--bucket-store-currentwindow
+                       db day hostname data)
+                      (deterred-activitywatch--load-currentwindow
+                       bucket-id hostname nil callback (cdr days))))
+          :error (cl-function
+                  (lambda (&key error-thrown &allow-other-keys)
+                    (message "Error!: %S" error-thrown)))))
+    (when callback (funcall callback))))
 
-(defun deterred-activitywatch-load ()
-  "Load data from ActivityWatch API into DETERRED."
+(defun deterred-activitywatch-load (&optional callback)
+  "Load data from ActivityWatch API into DETERRED.
+
+If CALLBACK is non-nil, call it when the sync is done."
   (interactive)
   (request (concat deterred-activitywatch-api "/0/buckets")
     :parser 'json-read
     :encoding 'utf-8
-    :success (cl-function
-              (lambda (&key data &allow-other-keys)
-                ;; Load AFK buckets
-                (deterred-activitywatch--bucket-load-afk-recursive
+    :success
+    (cl-function
+     (lambda (&key data &allow-other-keys)
+       ;; Load AFK buckets
+       (deterred-activitywatch--bucket-load-afk-recursive
+        (seq-filter
+         (lambda (bucket)
+           (equal (alist-get 'type (cdr bucket))
+                  "afkstatus"))
+         data)
+        ;; Load the dependent buckets
+        (lambda ()
+          (let ((buckets-to-sync
                  (seq-filter
                   (lambda (bucket)
-                    (equal (alist-get 'type (cdr bucket))
-                           "afkstatus"))
-                  data)
-                 ;; Load the dependent buckets
-                 (lambda ()
-                   (dolist (bucket data)
-                     (pcase (alist-get 'type (cdr bucket))
-                       ("currentwindow"
-                        (deterred-activitywatch--load-currentwindow
-                         (alist-get 'id (cdr bucket))
-                         (alist-get 'hostname (cdr bucket))
-                         (alist-get 'created (cdr bucket))))
-                       (_ nil)))))))
+                    (member (alist-get 'type (cdr bucket)) '("currentwindow")))
+                  data))
+                (synced 0))
+            (when (seq-empty-p buckets-to-sync)
+              (when callback (funcall callback)))
+            (dolist (bucket buckets-to-sync)
+              (pcase (alist-get 'type (cdr bucket))
+                ("currentwindow"
+                 (deterred-activitywatch--load-currentwindow
+                  (alist-get 'id (cdr bucket))
+                  (alist-get 'hostname (cdr bucket))
+                  (alist-get 'created (cdr bucket))
+                  (lambda ()
+                    (cl-incf synced)
+                    (when (eql synced (seq-length buckets-to-sync))
+                      (when callback (funcall callback))))))
+                (_ nil))))))))
     :error (cl-function
             (lambda (&key error-thrown &allow-other-keys)
               (message "Error!: %S" error-thrown)))))
+
+(defclass deterred-activitywatch (deterred-source)
+  ((name :initform "ActivityWatch")
+   (warn-days :initform 1))
+  "DETERRED source for ActivityWatch")
+
+(cl-defmethod deterred-source-sync ((source deterred-activitywatch) &optional callback)
+  "Sync DETERRED with ActivityWatch.
+
+Call CALLBACK when done.
+
+SOURCE is an instance of `deterred-activitywatch'."
+  (deterred-activitywatch-load callback))
+
+(cl-defmethod deterred-source-range ((_source deterred-activitywatch) &optional db)
+  "Get the data availability range for ActivityWatch.
+
+DB is the sqlite database object.
+
+Return a cons cell, with car as the start timestamp, and cdr as the
+end timestamp."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(notafk_start_timestamp), MAX(notafk_end_timestamp)
+                    FROM activitywatch_notafk_period")))
+    (cons (caar data) (cadar data))))
 
 (provide 'deterred-activitywatch)
 ;;; deterred-activitywatch.el ends here

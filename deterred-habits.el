@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-source)
 (require 'org)
 (require 'org-habit)
 (require 'cl-lib)
@@ -93,6 +94,34 @@
          db :table-name 'habit_record
          :values (deterred-habits--parse-buffer)
          :conflict-action 'do-nothing)))))
+
+(defclass deterred-habits (deterred-source)
+  ((name :initform "Habits (org-habit)")
+   (warn-days :initform 31)
+   (org-files :initarg :org-files))
+  "DETERRED source for org-habit.")
+
+(cl-defmethod deterred-source-range ((_source deterred-habits) &optional db)
+  "Get the data availability range for org-habit.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (data (sqlite-select
+                db "SELECT MIN(timestamp), MAX(timestamp)
+                    FROM habit_record")))
+    (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-sync ((source deterred-habits) &optional callback)
+  "Sync DETERRED with org-habit.
+
+Call CALLBACK when done.
+
+SOURCE is an instance of `deterred-habits'."
+  (unless (oref source org-files)
+    (user-error "No org-files set for `deterred-habits'"))
+  (dolist (file (oref source org-files))
+    (deterred-habits-load file))
+  (when callback (funcall callback)))
 
 (provide 'deterred-habits)
 ;;; deterred-habits.el ends here

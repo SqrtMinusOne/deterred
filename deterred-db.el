@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'seq)
+(require 'sqlite)
 
 (defcustom deterred-db-location "~/.deterred/database.db"
   "The path to file where the Deterred database is stored."
@@ -231,7 +232,8 @@ latter, CONFLICT-ATTRS is also required."
                         values-query
                         " "
                         conflict-query)))
-    (deterred-db-execute-trace db query)))
+    (when values
+      (deterred-db-execute-trace db query))))
 
 (defun deterred-db-cleanup-unsafe (db table-name id-attr ids)
   "Delete records from TABLE-NAME with ids not in IDS.
