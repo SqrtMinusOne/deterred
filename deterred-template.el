@@ -50,7 +50,7 @@ Otherwise, try to `read' it."
         ((listp value) (error "Can't process %s as value" value))
         (t (read (deterred-template--unescape value)))))
 
-(defun deterred-template--parse-accessor (accessor)
+(defun deterred-template--parse-accessor-expr (accessor)
   "Parse ACCESSOR.
 
 Accessor is a string that traverses an object."
@@ -99,6 +99,11 @@ Accessor is a string that traverses an object."
              do (setq expr `(seq-elt ,expr ,value)))
     expr))
 
+(defun deterred-template--parse-accessor (accessor)
+  (if (string-match-p (rx bos "(" (* nonl) ")" eos) accessor)
+      (read accessor)
+    (deterred-template--parse-accessor-expr accessor)))
+
 (defun deterred-template--parse-children (elem)
   (let (child-res)
     (mapc (lambda (child)
@@ -121,24 +126,37 @@ Accessor is a string that traverses an object."
       (error "<eval> tags mustn't have any children"))
     (push `(eval ,(deterred-template--process-value (caddr elem))) res))
    ;; <var value="accessor" />
+   ;; <var value="accessor" convert="number-to-string" />
    ;; accessor: a->b->c (for alists)
    ;; accessor: a.b.c (for plists)
    ((eq (car elem) 'var)
     (let ((value (alist-get 'value (cadr elem))))
       (unless value
         (error "<var> must have the \"value\" attribute"))
-      (push `(var ,(deterred-template--parse-accessor
-                    (deterred-template--unescape value)))
+      (push `(var ((accessor . ,(deterred-template--parse-accessor
+                                 (deterred-template--unescape value)))
+                   (convert . ,(when-let (f (alist-get 'convert (cadr elem)))
+                                 (intern f)))))
             res)))
-   ;; <mapcar iter="accessor" var="iter" >...</mapcar>
-   ((eq (car elem) 'mapcar)
+   ;; <let var1="accessor1" var2="accessor2">...</let>
+   ((eq (car elem) 'let)
+    (push `(let ,(cl-loop
+                  for (k . v) in (cadr elem)
+                  collect (cons k (deterred-template--parse-accessor
+                                   (deterred-template--unescape v))))
+             ,(deterred-template--parse-children elem))
+          res))
+   ;; <mapconcat iter="accessor" var="iter">...</mapcar>
+   ;; <mapconcat iter="accessor" var="iter" separator="\n" >...</mapcar>
+   ((eq (car elem) 'mapconcat)
     (let ((iter (alist-get 'iter (cadr elem))))
       (unless iter
-        (error "<mapcar> must have the \"iter\" tag"))
-      (push `(mapcar
+        (error "<mapconcat> must have the \"iter\" tag"))
+      (push `(mapconcat
               ((accessor . ,(deterred-template--parse-accessor
                              (deterred-template--unescape iter)))
-               (var . ,(intern (or (alist-get 'var (cadr elem)) "iter"))))
+               (var . ,(intern (or (alist-get 'var (cadr elem)) "iter")))
+               (separator . ,(or (alist-get 'separator (cadr elem)) "\n")))
               ,(deterred-template--parse-children elem))
             res)))
    ;; <propertize key1="value1; value2" >...</propertize>
@@ -147,18 +165,25 @@ Accessor is a string that traverses an object."
             ,(cl-loop for (k . v) in (cadr elem)
                       collect
                       (cons k (mapcar #'deterred-template--process-value
-                                      (string-split v))))
+                                      (string-split
+                                       v deterred-template--list-separator))))
             ,(deterred-template--parse-children elem))
           res))
    ;; <b>, <i>, <u>
    ((member (car elem) '(b i u))
     (push `(propertize
             ((face . ,(pcase (car elem)
-                        ('b 'bold)
-                        ('i 'italic)
-                        ('u 'underline))))
+                        ('b ''bold)
+                        ('i ''italic)
+                        ('u ''underline))))
             ,(deterred-template--parse-children elem))
           res))
+   ;; <br />
+   ((eq (car elem) 'br)
+    (push '(br) res))
+   ;; <trim>...</trim>
+   ((eq (car elem) 'trim)
+    (push `(trim nil ,(deterred-template--parse-children elem)) res))
    ;; <button click="(expr)>...</button>"
    ((member (car elem) '(button))
     (let ((click (alist-get 'click (cadr elem))))
@@ -190,21 +215,63 @@ Accessor is a string that traverses an object."
     (deterred-template--reverse-tree
      (deterred-template--parse-tree tree))))
 
+(defun deterred-template--tree-to-commands (tree)
+  `(concat
+    ,@(mapcar
+       (lambda (elem)
+         (if (stringp elem) elem
+           (pcase (car elem)
+             ('eval (cadr elem))
+             ('var (if-let (convert (alist-get 'convert (cadr elem)))
+                       `(,convert ,(alist-get 'accessor (cadr elem)))
+                     (alist-get 'accessor (cadr elem))))
+             ('let `(let (,@(mapcar
+                             (lambda (elem)
+                               `(,(car elem) ,(cdr elem)))
+                             (cadr elem)))
+                      ,(deterred-template--tree-to-commands (caddr elem))))
+             ('mapconcat
+              `(mapconcat
+                (lambda (,(alist-get 'var (cadr elem)))
+                  ,(deterred-template--tree-to-commands (caddr elem)))
+                ,(alist-get 'accessor (cadr elem))
+                ,(alist-get 'separator (cadr elem))))
+             ('propertize
+              `(propertize ,(deterred-template--tree-to-commands (caddr elem))
+                           ,@(mapcan
+                              (lambda (item)
+                                `(',(car item) ,(cdr item)))
+                              (cadr elem))))
+             ('br "\n")
+             ('trim `(string-trim ,(deterred-template--tree-to-commands (caddr elem))))
+             ;; ('button
+             ;;  `(widget-create
+             ;;    'push-button
+             ;;    :notify (lambda ()
+             ;;              ,(alist-get 'notify (cadr elem)))
+             ;;    ,(deterred-template--tree-to-commands (caddr elem))))
+             (_ (error "Unknown element in syntax tree: %s" (car elem))))))
+       tree)))
+
 (defvar-local deterred-template-playground-template
     "A line of text
-<eval>(+ 2 3)</eval>
-<var value=\"a->:b->'c.'d.'e[1][2]->1\" />
-  <mapcar iter=\"list\">
-<var value=\"iter\" />
-</mapcar>
-<propertize face=\"bold\">
-  Bold line
-</propertize>
-<button click=\"(message a)\">
-  Say hello
-</button>")
+<eval>(number-to-string (+ 2 3))</eval><br>
 
+<let v=\"1\" vv=\"\\\"test\\\"\">
+<var value=\"v\" convert=\"number-to-string\" />-<var value=\"vv\" />
+</let>
+
+<let list=\"'(1 2 3 4 5)\">
+<var value=\"list\" convert=\"prin1-to-string\" />
+<mapconcat iter=\"list\" var=\"iter\">
+<trim><b><var value=\"iter\" convert=\"number-to-string\" /></b></trim>
+</mapconcat>
+</let>
+")
+
+(defvar-local deterred-template-playground-html-tree nil)
 (defvar-local deterred-template-playground-tree nil)
+(defvar-local deterred-template-playground-commands nil)
 (defvar-local deterred-template-playground-render nil)
 
 (defvar deterred-template-playground-mode-map
@@ -245,29 +312,72 @@ Accessor is a string that traverses an object."
                  "Refresh")
   (insert "\n\n"))
 
+(defun deterred-template--print-between (start-line end-line value)
+  (save-excursion
+    (search-forward start-line)
+    (next-line)
+    (beginning-of-line)
+    (save-excursion
+      (let ((start (point)))
+        (save-excursion
+          (if end-line
+              (progn
+                (search-forward end-line)
+                (previous-line)
+                (beginning-of-line)
+                (delete-region start (point)))
+            (delete-region start (point-max))))
+        (insert value)))))
+
 (defun deterred-template-playground-refresh ()
   (interactive)
   (unless (derived-mode-p 'deterred-template-playground-mode)
     (user-error "Not in `deterred-template-playground-mode'"))
+  (setq deterred-template-playground-html-tree
+        (condition-case-unless-debug err
+            (let ((tmp deterred-template-playground-template))
+              (with-temp-buffer
+                (insert (deterred-template--escape tmp))
+                (libxml-parse-html-region)))
+          (error (error-message-string err))))
   (setq deterred-template-playground-tree
         (condition-case-unless-debug err
             (deterred-template--parse deterred-template-playground-template)
           (error (error-message-string err))))
+  (setq deterred-template-playground-commands
+        (condition-case-unless-debug err
+            (deterred-template--tree-to-commands
+             deterred-template-playground-tree)
+          (error (error-message-string err))))
+  (setq deterred-template-playground-render
+        (condition-case-unless-debug err
+            (eval deterred-template-playground-commands)
+          (error (error-message-string err))))
   (save-excursion
+    (outline-show-all)
     (let ((inhibit-read-only t))
       (goto-char (point-min))
-      (search-forward "* Syntax tree")
-      (next-line)
-      (beginning-of-line)
-      (save-excursion
-        (let ((start (point)))
-          (search-forward (format "* Render"))
-          (previous-line)
-          (beginning-of-line)
-          (delete-region start (point))))
-      (insert (with-output-to-string
-                (pp deterred-template-playground-tree))
-              "\n"))))
+      (deterred-template--print-between
+       "* HTML tree" "* Syntax tree"
+       (concat
+        (with-output-to-string
+          (pp deterred-template-playground-html-tree))
+        "\n\n"))
+      (deterred-template--print-between
+       "* Syntax tree" "* Command tree"
+       (concat
+        (with-output-to-string
+          (pp deterred-template-playground-tree))
+        "\n\n"))
+      (deterred-template--print-between
+       "* Command tree" "* Render"
+       (concat
+        (with-output-to-string
+          (pp deterred-template-playground-commands))
+        "\n\n"))
+      (deterred-template--print-between
+       "* Render" nil
+       deterred-template-playground-render))))
 
 (defun deterred-template--playground-render ()
   (let ((inhibit-read-only t))
@@ -275,7 +385,11 @@ Accessor is a string that traverses an object."
     (unless (derived-mode-p #'deterred-template-playground-mode)
       (deterred-template-playground-mode))
     (deterred-template--playground-render-controls)
+    (insert (propertize "* HTML tree" 'face 'outline-1) "\n")
+    (insert "TODO\n\n")
     (insert (propertize "* Syntax tree" 'face 'outline-1) "\n")
+    (insert "TODO\n\n")
+    (insert (propertize "* Command tree" 'face 'outline-1) "\n")
     (insert "TODO\n\n")
     (insert (propertize "* Render" 'face 'outline-1) "\n")
     (insert "TODO\n\n")
