@@ -254,5 +254,20 @@ FIELDS is a list of symbols that will be used as keys."
             for i from 0
             collect (cons field (nth i ,list-var))))
 
+(defun deterred-db-select-alist (db query &optional values return-type)
+  "Perform a select QUERY on DB, return the result as alists.
+
+VALUES is the list of values to be interpolated into QUERY.
+
+If RETURN-TYPE is string, return strings.  Otherwise return symbols."
+  (let* ((data (sqlite-select db query values 'full))
+         (fields (car data)))
+    (unless (eq return-type 'string)
+      (setq fields (mapcar #'intern fields)))
+    (cl-loop for row in (cdr data)
+             collect (cl-loop for field in fields
+                              for datum in row
+                              collect (cons field datum)))))
+
 (provide 'deterred-db)
 ;;; deterred-db.el ends here

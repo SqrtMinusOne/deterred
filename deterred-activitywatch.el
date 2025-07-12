@@ -37,15 +37,20 @@
 
 (defcustom deterred-activitywatch-api "http://localhost:5600/api"
   "ActivityWatch API URL."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-activitywatch-convert-unknown "Emacs"
   "How to interpret \"unknown\" from the current window watcher.
 
 I set this to \"Emacs\" because this usually means EXWM for me."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
+
+(defcustom deterred-activitywatch-show-top-in-summary 5
+  "Show that many top apps in the daily ActivityWatch summary."
+  :group 'deterred-sources
+  :type 'number)
 
 (defun deterred-activitywatch--bucket-store-afk (events hostname)
   "Store AFK EVENTS for HOSTNAME in DETERRED.
@@ -397,6 +402,67 @@ end timestamp."
                 db "SELECT MIN(notafk_start_timestamp), MAX(notafk_end_timestamp)
                     FROM activitywatch_notafk_period")))
     (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-activitywatch) timestamp &optional db)
+  "Make ActivityWatch summary for TIMESTAMP.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (day (format-time-string "%F" timestamp))
+         (total-minutes
+          (or (alist-get
+               'total (car
+                       (deterred-db-select-alist
+                        db "SELECT sum(total_duration) / 60 total
+                        FROM activitywatch_currentwindow_agg
+                        WHERE day = ?"
+                        (list day))))
+              0))
+         (app-data
+          (deterred-db-select-alist
+           db "SELECT app, total_duration / 60 total
+               FROM activitywatch_currentwindow_agg
+               WHERE day = ?
+               ORDER BY total DESC
+               LIMIT ?"
+           (list day deterred-activitywatch-show-top-in-summary)))
+         (hostname-data
+          (deterred-db-select-alist
+           db "SELECT hostname, sum(total_duration) / 60 total
+               FROM activitywatch_currentwindow_agg
+               WHERE day = ?"
+           (list day))))
+    (when (> total-minutes 0)
+      `((:short-description
+         . ,(format "%s hours"
+                    (deterred-utils-duration-from-minutes total-minutes)))
+        (:long-description
+         . ,(deterred-inline-template
+              "<trim>
+  <line>
+    Hostnames:
+    <mapconcat iter=\"hostname-data\" separator=\"; \">
+      <eval>
+        (deterred-utils-duration-from-minutes (alist-get 'total iter))
+      </eval>
+      on
+      <var value=\"iter->'hostname\" />
+    </mapconcat>
+  </line><br>
+  <trim>
+    Top <var value=\"deterred-activitywatch-show-top-in-summary\" convert=\"number-to-string\" /> apps:<br><mapconcat iter=\"app-data\">
+      <line>
+        -
+        <eval>
+          (deterred-utils-duration-from-minutes (alist-get 'total iter))
+        </eval>
+        in
+        <var value=\"iter->'app\" />
+      </line>
+    </mapconcat>
+  </trim>
+</trim>"))))))
 
 (provide 'deterred-activitywatch)
 ;;; deterred-activitywatch.el ends here

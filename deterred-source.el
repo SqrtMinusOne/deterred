@@ -81,6 +81,18 @@ Call CALLBACK when done.")
     #'cl--generic-method-specializers
     (cl--generic-method-table (cl--generic #'deterred-source-actions)))))
 
+(cl-defgeneric deterred-source-day-summary (source timestamp &optional db)
+  "Make a summary for TIMESTAMP from SOURCE.
+
+Return an alist with the following keys:
+- `:short-description'
+- `:long-description'
+All can be nil.")
+
+(cl-defmethod deterred-source-day-summary ((_source deterred-source) _timestamp &optional _db)
+  "A dummy implementation of `deterred-source-day-summary'."
+  nil)
+
 (defun deterred-source--actions-pick (action-table &optional callback)
   "Prompt the user with ACTION-TABLE and execute the pick.
 

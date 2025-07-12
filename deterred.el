@@ -32,5 +32,9 @@
   "Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard."
   :group 'applications)
 
+(defgroup deterred-sources nil
+  "Sources configuration for DETERRED."
+  :group 'deterred)
+
 (provide 'deterred)
 ;;; deterred.el ends here

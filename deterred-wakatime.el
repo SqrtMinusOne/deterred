@@ -1,6 +1,6 @@
 ;;; deterred-wakatime.el --- TODO -*- lexical-binding: t -*-
 
-;; Copyright (C) 2024 Korytov Pavel
+;; Copyright (C) 2025 Korytov Pavel
 
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
@@ -27,6 +27,8 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-source)
+(require 'deterred-utils)
 (require 'cl-lib)
 
 (defconst deterred-wakatime-key-mappings
@@ -45,17 +47,17 @@
 
 (defcustom deterred-wakatime-api-key nil
   "Api key for WakaTime."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-wakatime-api-endpoint "https://wakatime.com/api/v1/"
   "Api key for WakaTime."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-wakatime-api-range 14
   "How many days in the past to include in API export."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'number)
 
 (defun deterred-wakatime--process-project (day-in-project db)
@@ -271,6 +273,82 @@ Call CALLBACK when done."
   (unless deterred-wakatime-api-key
     (user-error "Wakatime API key not set!"))
   (deterred-wakatime-api-load callback))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-wakatime) timestamp &optional db)
+  "Make WakaTime summary for TIMESTAMP.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (total-data
+          (deterred-db-select-alist
+           db "SELECT wp.name, wgt.total_seconds / 60 total
+               FROM wakatime_projects wp
+               INNER JOIN wakatime_grand_total wgt ON wgt.project_id = wp.id
+               WHERE wgt.timestamp = ?
+               ORDER BY wgt.total_seconds DESC"
+           (list timestamp)))
+         (editor-data
+          (deterred-db-select-alist
+           db "SELECT we.name editor, sum(we.total_seconds) / 60 total
+               FROM wakatime_editors we
+               WHERE we.timestamp = ?
+               GROUP BY we.name
+               ORDER BY total DESC"
+           (list timestamp)))
+         (languages-data
+          (deterred-db-select-alist
+           db "SELECT wl.name lang, wp.name project, wl.total_seconds / 60 total
+               FROM wakatime_languages wl
+               INNER JOIN wakatime_projects wp ON wp.id = wl.project_id
+               WHERE wl.timestamp = ?
+               GROUP BY wl.name
+               ORDER BY total DESC"
+           (list timestamp)))
+         (total-minutes
+          (apply #'+ (mapcar (lambda (d) (alist-get 'total d)) total-data)))
+         (first-project-percentile (if (> total-minutes 0)
+                                       (/ (alist-get 'total (car total-data))
+                                          total-minutes)
+                                     0)))
+    (when (> total-minutes 0)
+      (let ((first-project-duration
+             (deterred-utils-duration-from-minutes
+              (alist-get 'total (car total-data))))
+            (other-projects-duration
+             (deterred-utils-duration-from-minutes
+              (- total-minutes
+                 (alist-get 'total (car total-data)))))
+            (all-projects-duration
+             (deterred-utils-duration-from-minutes total-minutes)))
+        `((:short-description
+           . ,(deterred-inline-template
+                "<line>
+  <when cond=\"(> first-project-percentile 0.5)\">
+    <var value=\"first-project-duration\" /> in <var value=\"total-data[0]->'name\" />;
+    <var value=\"other-projects-duration\" />
+    in <eval>(number-to-string (1- (length total-data)))</eval> other projects
+  </when>
+  <when cond=\"(< first-project-percentile 0.5)\">
+    <var value=\"all-projects-duration\" />
+    in <eval>(number-to-string (length total-data))</eval> projects
+  </when>
+</line>"))
+          (:long-description
+           . ,(deterred-inline-template
+                "<trim>
+  Projects: <br>
+  <mapconcat iter=\"total-data\">
+    <line>
+      -
+      <eval>
+        (deterred-utils-duration-from-minutes (alist-get 'total iter))
+      </eval>
+      in
+      <var value=\"iter->'name\" />
+    </line>
+  </mapconcat>
+</trim>")))))))
 
 (provide 'deterred-wakatime)
 ;;; deterred-wakatime.el ends here

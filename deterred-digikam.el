@@ -31,6 +31,10 @@
 (require 'deterred-locations)
 (require 'cl-lib)
 
+(defcustom deterred-digikam-folder nil
+  "Gallery root for digiKam."
+  :group 'deterred-sources)
+
 (defun deterred-digikam--get-data (db digikam-db)
   "Read data from DIGIKAM-DB.
 
@@ -151,6 +155,64 @@ SOURCE is an instance of `deterred-digikam'."
     (user-error "No digikam-db file set"))
   (deterred-digikam-load (oref source digikam-db))
   (when callback (funcall callback)))
+
+(defun deterred-digikam--show-gallery (button)
+  (let* ((db (deterred-db--init))
+         (timestamp (oref (magit-section-at) value))
+         (photos
+          (deterred-db-select-alist
+           db "SELECT p.id, p.timestamp, p.camera, ? || a.path || '/' || p.filename path
+                      FROM digikam_photo p
+                      INNER JOIN digikam_album a ON p.album_id = a.id
+                      WHERE p.timestamp BETWEEN ? AND ?"
+           (list (expand-file-name deterred-digikam-folder)
+                 timestamp (+ (* 60 60 24) timestamp))))
+         (inhibit-read-only t))
+    (save-excursion
+      (goto-char (button-start button))
+      (delete-region (button-start button) (button-end button))
+      (insert
+       (deterred-inline-template "<mapconcat iter=\"photos\" separator=\"\"><trim>
+  <img src=\"iter->'path\" max-height=\"60\" />
+</trim> </mapconcat>"))
+      (let ((next-button (next-button (point))))
+        (when (string= "(Show all)" (button-label next-button))
+          (let ((inhibit-read-only t))
+            (delete-region (button-start next-button) (button-end next-button))))))))
+
+(defun deterred-digikam--show-gallery-everywhere (&rest _)
+  (save-excursion
+    (goto-char (point-min))
+    (while-let ((button (next-button (point) t)))
+      (goto-char button)
+      (let ((button-text (buffer-substring-no-properties
+                          (button-start button) (button-end button)))
+            (section (magit-section-at)))
+        (when (magit-section-invisible-p section)
+          (magit-section-show section))
+        (when (string-match-p (rx "Show " (* num) " photos") button-text)
+          (deterred-digikam--show-gallery button))
+        (when (string= "(Show all)" button-text)
+          (let ((inhibit-read-only t))
+            (delete-region (button-start button) (button-end button)))))
+      (goto-char (1+ (button-end button))))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-digikam) timestamp &optional db)
+  "Make digiKam summary for TIMESTAMP."
+  (let* ((db (or db (deterred-db--init)))
+         (total-photos
+          (or (caar (sqlite-select
+                     db "SELECT count(*) FROM digikam_photo
+                         WHERE timestamp BETWEEN ? AND ?"
+                     (list timestamp (+ (* 60 60 24) timestamp))))
+              0)))
+    (when (> total-photos 0)
+      `((:short-description
+         . ,(format "%s photos" total-photos))
+        (:long-description
+         . ,(deterred-inline-template
+              "<button click=\"#'deterred-digikam--show-gallery\">Show <var value=\"total-photos\" convert=\"number-to-string\" /> photos</button> <button click=\"#'deterred-digikam--show-gallery-everywhere\">(Show all)</button>"))))))
 
 (provide 'deterred-digikam)
 ;;; deterred-digikam.el ends here

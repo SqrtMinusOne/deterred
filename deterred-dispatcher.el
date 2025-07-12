@@ -27,7 +27,9 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-faces)
 (require 'deterred-source)
+(require 'deterred-utils)
 (require 'transient)
 (require 'magit-section)
 
@@ -47,11 +49,6 @@
   :type '(choice
           (string :tag "String")
           (function :tag "Function")))
-
-(defface deterred-dispatcher-info-face
-  '((t (:inherit success)))
-  "A face to highlight various information."
-  :group 'deterred)
 
 (defun deterred-dispatcher--magit-section-toggle-workaround (section)
   "`magit-section-toggle' with a workaround for invisible lines.
@@ -91,10 +88,11 @@ No idea what I'm doing wrong, but this seems to help."
   (setq-local buffer-read-only t))
 
 (defun deterred-dispatcher--render-sources ()
+  "Renderer `deterred-sources' for `deterred-dispatcher'."
   (magit-insert-section (deterred-info-sources)
     (insert (propertize
              (format "Active sources: %s" (length deterred-sources))
-             'face 'magit-section-heading))
+             'face 'deterred-faces-section-heading-1))
     (magit-insert-heading)
     (let ((max-name-length
            (seq-max (append
@@ -114,17 +112,17 @@ No idea what I'm doing wrong, but this seems to help."
            (format "%s  %s - %s"
                    (propertize
                     (string-pad (oref source name) max-name-length)
-                    'face 'font-lock-keyword-face)
+                    'face 'deterred-faces-source-name)
                    (propertize
                     (format-time-string deterred-dispatcher-short-date-format
                                         (car range))
-                    'face 'deterred-dispatcher-info-face)
+                    'face 'deterred-faces-date)
                    (propertize
                     (format-time-string deterred-dispatcher-short-date-format
                                         (cdr range))
                     'face (if (or (null warn-days)
                                   (> warn-days unsynced-days))
-                              'success
+                              'deterred-faces-date
                             'warning))))
           (when can-sync
             (insert " ")
@@ -150,6 +148,62 @@ No idea what I'm doing wrong, but this seems to help."
                            "[Actions...]"))
           (insert "\n"))))))
 
+(defun deterred-dispatcher--on-this-day-data (&optional db)
+  (let ((db (or db (deterred-db--init)))
+        res)
+    (mapcar
+     (lambda (source)
+       (let* ((range (deterred-source-range source db))
+              (days-data (deterred-utils-get-this-day (car range)))
+              (source-name (oref source name)))
+         (cl-loop
+          for (description . timestamp) in days-data
+          for value = (condition-case-unless-debug err
+                          (deterred-source-day-summary source timestamp db)
+                        (error `((:short-description
+                                  . ,(propertize (error-message-string err)
+                                                 'face 'error)))))
+          when value
+          do (progn
+               (setf (alist-get :description (alist-get timestamp res))
+                     description)
+               (setf (alist-get :source value) source)
+               (setf (alist-get
+                      source-name
+                      (alist-get timestamp res)
+                      nil nil #'equal)
+                     value)))))
+     deterred-sources)
+    (setq res (seq-sort-by #'car '> res))
+    res))
+
+(defun deterred-dispatcher--render-on-this-day (&optional db)
+  (let* ((db (or db (deterred-db--init)))
+         (data (deterred-dispatcher--on-this-day-data db)))
+    (magit-insert-section (deterred-dispatcher-on-this-day)
+      (insert (propertize "On this day" 'face 'deterred-faces-section-heading-1))
+      (magit-insert-heading)
+      (cl-loop
+       for (timestamp . datum) in data
+       do (magit-insert-section (deterred-dispatcher-on-this-day-day timestamp nil)
+            (insert (propertize
+                     (format "%s, %s"
+                             (alist-get :description datum)
+                             (format-time-string deterred-dispatcher-date-format timestamp))
+                     'face 'deterred-faces-section-heading-2))
+            (magit-insert-heading)
+            (cl-loop
+             for (source-name . item) in datum
+             unless (symbolp source-name)
+             do (magit-insert-section (deterred-dispatcher-on-this-day-item timestamp t)
+                  (insert (format "%s: %s"
+                                  (propertize source-name
+                                              'face 'deterred-faces-source-name)
+                                  (alist-get :short-description item)))
+                  (magit-insert-heading)
+                  (insert (or (alist-get :long-description item) "") "\n")))
+            (insert "\n"))))))
+
 (defun deterred-dispatcher--render-contents ()
   "Render DETERRED dispatcher."
   (let ((inhibit-read-only t))
@@ -159,14 +213,16 @@ No idea what I'm doing wrong, but this seems to help."
     (unless (derived-mode-p #'deterred-dispatcher-mode)
       (deterred-dispatcher-mode))
     (magit-insert-section (deterred-info)
-      (magit-insert-section (deterred-info-summary)
+      (magit-insert-section (deterred-info-summary nil nil)
         (insert (format "Date:          %s\n"
                         (propertize (format-time-string deterred-dispatcher-date-format)
-                                    'face 'deterred-dispatcher-info-face)))
+                                    'face 'deterred-faces-date)))
         (magit-insert-heading)
         (insert "HELLO\nCampsite Gaia"))
       (insert "\n\n")
-      (deterred-dispatcher--render-sources)))
+      (deterred-dispatcher--render-sources)
+      (insert "\n\n")
+      (deterred-dispatcher--render-on-this-day)))
   (goto-char (point-min)))
 
 (defun deterred-dispatcher-refresh ()

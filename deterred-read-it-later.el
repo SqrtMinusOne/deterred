@@ -35,39 +35,39 @@
 
 (defcustom deterred-read-it-later-readeck-url "http://localhost:8000/"
   "URL of the Readeck instance."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-read-it-later-readeck-token nil
   "Token for the Readeck instance.
 
 Has to have the \"Bookmarks: Read Only\" role."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom detered-read-it-later-wallabag-url "http://localhost:8000"
   "URL for the Wallabag instance."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-read-it-later-wallabag-client-id nil
   "Client ID for wallabag."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-read-it-later-wallabag-client-secret nil
   "Client secret for wallabag."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-read-it-later-wallabag-username nil
   "Username for wallabag."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defcustom deterred-read-it-later-wallabag-password nil
   "Password for wallabag."
-  :group 'deterred
+  :group 'deterred-sources
   :type 'string)
 
 (defconst deterred-read-it-later-uuid-namespace
