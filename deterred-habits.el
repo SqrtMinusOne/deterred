@@ -123,5 +123,20 @@ SOURCE is an instance of `deterred-habits'."
     (deterred-habits-load file))
   (when callback (funcall callback)))
 
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-habits) timestamp &optional db)
+  (let ((db (or db (deterred-db--init)))
+        (habits
+         (deterred-db-select-alist
+          db "SELECT * FROM habit_record
+              WHERE timestamp BETWEEN ? AND ?"
+          (list timestamp (+ (* 60 60 24) timestamp)))))
+    (when habits
+      `((:short-description
+         . ,(format "% records" (seq-length habits)))
+        (:long-description
+         . ,(deterred-inline-template
+              "<mapconcat iter=\"habits\">- <var value=\"iter->'habit\" /></mapconcat>"))))))
+
 (provide 'deterred-habits)
 ;;; deterred-habits.el ends here
