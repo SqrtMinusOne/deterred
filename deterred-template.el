@@ -28,6 +28,12 @@
 ;;; Code:
 (require 'button)
 (require 'outline)
+(require 'browse-url)
+
+(defcustom deterred-template-image-open-command #'browse-url-xdg-open
+  "A command to open images."
+  :type 'function
+  :group 'deterred)
 
 (defconst deterred-template--alist-nest-symbol "->")
 (defconst deterred-template--plist-nest-symbol ".")
@@ -377,9 +383,16 @@ latter."
              ('img `(let ((img (create-image ,(alist-get 'source (cadr elem))
                                              nil nil
                                              ,@(alist-get 'params (cadr elem)))))
-                      (if (image-type-available-p (image-property img :type))
-                          (propertize "[IMG]" 'display img)
-                        "[IMG]")))
+                      (apply
+                       #'propertize
+                       (if (image-type-available-p (image-property img :type))
+                           (propertize "[IMG]" 'display img)
+                         "[IMG]")
+                       (button--properties
+                        (lambda (&rest _)
+                          (funcall deterred-template-image-open-command
+                                   ,(alist-get 'source (cadr elem))))
+                        nil nil))))
              ('button
               `(apply #'propertize
                       ,(deterred-template--tree-to-commands (caddr elem))
