@@ -47,6 +47,11 @@
   "Face for tertiary section headings."
   :group 'deterred-faces)
 
+(defface deterred-faces-section-heading-4
+  '((t (:inherit success)))
+  "Face for quaternary section headings."
+  :group 'deterred-faces)
+
 (defface deterred-faces-source-name
   '((t (:inherit font-lock-string-face)))
   "Face for data source names."

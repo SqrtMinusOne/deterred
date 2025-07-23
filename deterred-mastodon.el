@@ -195,5 +195,57 @@ SOURCE is an instance of `deterred-mastodon'."
                       (match-string 1 max-url)))))
     (deterred-mastodon-sync server account-id nil stop-id callback)))
 
+(defun deterred-mastodon--render-posts (posts)
+  (dolist (post posts)
+    (magit-insert-section (deterred-mastodon-post post t)
+      (insert
+       (propertize
+        (format "%s on %s via %s"
+                (format-time-string deterred-dispatcher-time-format
+                                    (alist-get 'timestamp post))
+                (alist-get 'server post)
+                (alist-get 'application post))
+        'face 'deterred-faces-section-heading-4))
+      (magit-insert-heading)
+      (insert
+       (string-trim
+        (with-temp-buffer
+          (shr-insert-document
+           (with-temp-buffer
+             (insert (alist-get 'content post))
+             (libxml-parse-html-region)))
+          (buffer-string))))
+      (insert "\n"))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-mastodon) timestamp &optional db)
+  "Make Mastodon summary for TIMESTAMP.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (posts (deterred-db-select-alist
+                 db "SELECT * FROM mastodon_post
+                     WHERE timestamp BETWEEN ? AND ? AND is_reply = 0"
+                 (list timestamp (+ (* 60 60 24) timestamp))))
+         (comments-count
+          (or (caar
+               (sqlite-select
+                db "SELECT count(*) FROM mastodon_post
+                    WHERE timestamp BETWEEN ? AND ? AND is_reply = 0"
+                (list timestamp (+ (* 60 60 24) timestamp))))
+              0))
+         (unique-servers
+          (seq-uniq (mapcar (lambda (post) (alist-get 'server post)) posts))))
+    (when posts
+      `((:short-description
+         . ,(concat (format "%d posts" (seq-length posts))
+                    (when (= (seq-length unique-servers) 1)
+                      (format " on %s" (car unique-servers)))
+                    (when (> 0 comments-count)
+                      (format " and %d comments" comments-count))))
+        (:long-description-fn
+         . ,(lambda (&rest _)
+              (deterred-mastodon--render-posts posts)))))))
+
 (provide 'deterred-mastodon)
 ;;; deterred-mastodon.el ends here
