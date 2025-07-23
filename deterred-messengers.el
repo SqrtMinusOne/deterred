@@ -34,6 +34,11 @@
 (defconst deterred-messengers-uuid-namespace
   "d9536b80-3213-4321-b37f-ebf1b558a530")
 
+(defcustom deterred-messengers-my-id nil
+  "The user's UUID."
+  :type 'string
+  :group 'deterred)
+
 (defun deterred-telegram--id (&rest ids)
   "Convert Telegram IDS into a unique UUID.
 
@@ -170,6 +175,72 @@ Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load Telegram JSON" deterred-messengers-load-telegram-json nil))
    callback))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-messengers) timestamp &optional db)
+  "Make messengers summary for TIMESTAMP.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (day-data
+          (deterred-db-select-alist
+           db "SELECT
+                 mc.id,
+                 mc.name,
+                 mc.\"type\",
+                 sum(CASE WHEN mm.sender_id != ? THEN 1 ELSE 0 END) received,
+                 sum(CASE WHEN mm.sender_id = ? THEN 1 ELSE 0 END) sent
+              FROM messenger_message mm
+              INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+              LEFT JOIN messenger_user mu ON mu.id = mc.target_user_id
+              WHERE mm.\"timestamp\" BETWEEN ? AND ?
+              GROUP BY mc.id, mc.name, mc.\"type\"
+              HAVING sum(CASE WHEN mm.sender_id = ? THEN 1 ELSE 0 END) > 0
+              ORDER BY mc.\"type\", sent DESC"
+           (list deterred-messengers-my-id deterred-messengers-my-id
+                 timestamp (+ (* 60 60 24) timestamp)
+                 deterred-messengers-my-id)))
+         (msg-by-type
+          (seq-reduce (lambda (acc datum)
+                        (let ((type (intern (alist-get 'type datum))))
+                          (unless (alist-get type acc)
+                            (setf (alist-get type acc) (cons 0 0)))
+                          (setf (car (alist-get type acc))
+                                (+ (alist-get 'received datum)
+                                   (car (alist-get type acc))))
+                          (setf (cdr (alist-get type acc))
+                                (+ (alist-get 'sent datum)
+                                   (cdr (alist-get type acc)) 0)))
+                        acc)
+                      day-data nil))
+         (data-by-type (seq-group-by
+                        (lambda (datum) (intern (alist-get 'type datum)))
+                        day-data)))
+    (when day-data
+      (setq my/test day-data)
+      `((:short-description
+         . ,(format "%s/%s in groups; %s/%s in personal"
+                    (or (car (alist-get 'group msg-by-type)) 0)
+                    (or (cdr (alist-get 'group msg-by-type)) 0)
+                    (or (car (alist-get 'personal_chat msg-by-type)) 0)
+                    (or (cdr (alist-get 'personal_chat msg-by-type)) 0)))
+        (:long-description
+         . ,(deterred-inline-template
+              "<trim>
+  Personal chats (received/sent):<br>
+  <mapconcat iter=\"data-by-type->'personal_chat\">
+    <line>
+     - <var value=\"iter->'name\" />: <var value=\"iter->'received\" convert=\"number-to-string\" />/<var value=\"iter->'sent\" convert=\"number-to-string\" />
+    </line>
+  </mapconcat>
+
+Group chats (received/sent):<br>
+  <mapconcat iter=\"data-by-type->'group\">
+    <line>
+     - <var value=\"iter->'name\" />: <var value=\"iter->'received\" convert=\"number-to-string\" />/<var value=\"iter->'sent\" convert=\"number-to-string\" />
+    </line>
+  </mapconcat>
+</trim>"))))))
 
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
