@@ -137,7 +137,7 @@ DB is the sqlite database object."
     (* 60 60 timezone)))
 
 (defclass deterred-locations (deterred-source)
-  ((name :initform "Locations")
+  ((name :initform "Location")
    (warn-days :initform nil))
   "DETERRED source for locations.")
 
@@ -153,6 +153,18 @@ end timestamp."
                 db "SELECT MIN(timestamp), MAX(timestamp)
                     FROM location_times")))
     (cons (caar data) (cadar data))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-locations) timestamp &optional db)
+  "Make locations summary for TIMESTAMP.
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (loc (deterred-locations-locate-at db timestamp)))
+    `((:short-description
+       . ,(format "%s (offset %s hours)"
+                  (alist-get 'name loc)
+                  (alist-get 'timezone loc))))))
 
 (provide 'deterred-locations)
 ;;; deterred-locations.el ends here
