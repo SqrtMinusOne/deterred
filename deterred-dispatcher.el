@@ -50,6 +50,13 @@
           (string :tag "String")
           (function :tag "Function")))
 
+(defcustom deterred-dispatcher-time-format "%H:%M"
+  "Format string for time entries."
+  :group 'deterred
+  :type '(choice
+          (string :tag "String")
+          (function :tag "Function")))
+
 (defun deterred-dispatcher--magit-section-toggle-workaround (section)
   "`magit-section-toggle' with a workaround for invisible lines.
 
@@ -201,7 +208,11 @@ No idea what I'm doing wrong, but this seems to help."
                                               'face 'deterred-faces-source-name)
                                   (alist-get :short-description item)))
                   (magit-insert-heading)
-                  (insert (or (alist-get :long-description item) "") "\n")))
+                  (when-let (long-description (alist-get :long-description item))
+                    (insert long-description "\n"))
+                  (when-let (long-description-fn
+                             (alist-get :long-description-fn item))
+                    (funcall long-description-fn item))))
             (insert "\n"))))))
 
 (defun deterred-dispatcher--render-contents ()
@@ -222,7 +233,9 @@ No idea what I'm doing wrong, but this seems to help."
       (insert "\n\n")
       (deterred-dispatcher--render-sources)
       (insert "\n\n")
-      (deterred-dispatcher--render-on-this-day)))
+      (deterred-dispatcher--render-on-this-day)
+      (let ((magit-section-cache-visibility nil))
+        (magit-section-show magit-root-section))))
   (goto-char (point-min)))
 
 (defun deterred-dispatcher-refresh ()
