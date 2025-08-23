@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-source)
+(require 'deterred-format)
 (require 'org)
 (require 'org-habit)
 (require 'cl-lib)
@@ -135,8 +136,8 @@ SOURCE is an instance of `deterred-habits'."
       `((:short-description
          . ,(format "% records" (seq-length habits)))
         (:long-description
-         . ,(deterred-inline-template
-              "<mapconcat iter=\"habits\">- <var value=\"iter->'habit\" /></mapconcat>"))))))
+         . ,(deterred-format
+             (f-mapconcat (f "- " (f-acc "iter->'habit")) habits)))))))
 
 (provide 'deterred-habits)
 ;;; deterred-habits.el ends here

@@ -29,6 +29,7 @@
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-locations)
+(require 'deterred-format)
 (require 'cl-lib)
 
 (defcustom deterred-digikam-folder nil
@@ -172,9 +173,10 @@ SOURCE is an instance of `deterred-digikam'."
       (goto-char (button-start button))
       (delete-region (button-start button) (button-end button))
       (insert
-       (deterred-inline-template "<mapconcat iter=\"photos\" separator=\"\"><trim>
-  <img src=\"iter->'path\" max-height=\"60\" />
-</trim> </mapconcat>"))
+       (deterred-format
+        (f-mapconcat
+         (f-img (f-acc "iter->'path") :max-height 60)
+         photos "")))
       (let ((next-button (next-button (point))))
         (when (string= "(Show all)" (button-label next-button))
           (let ((inhibit-read-only t))
@@ -211,8 +213,12 @@ SOURCE is an instance of `deterred-digikam'."
       `((:short-description
          . ,(format "%s photos" total-photos))
         (:long-description
-         . ,(deterred-inline-template
-              "<button click=\"#'deterred-digikam--show-gallery\">Show <var value=\"total-photos\" convert=\"number-to-string\" /> photos</button> <button click=\"#'deterred-digikam--show-gallery-everywhere\">(Show all)</button>"))))))
+         . ,(deterred-format
+             (f-button (f "Show " (f-num total-photos) " photos")
+                       #'deterred-digikam--show-gallery)
+             " "
+             (f-button "(Show all)"
+                       #'deterred-digikam--show-gallery-everywhere)))))))
 
 (provide 'deterred-digikam)
 ;;; deterred-digikam.el ends here

@@ -322,33 +322,23 @@ DB is the sqlite database object."
             (all-projects-duration
              (deterred-utils-duration-from-minutes total-minutes)))
         `((:short-description
-           . ,(deterred-inline-template
-                "<line>
-  <when cond=\"(> first-project-percentile 0.5)\">
-    <var value=\"first-project-duration\" /> in <var value=\"total-data[0]->'name\" />;
-    <var value=\"other-projects-duration\" />
-    in <eval>(number-to-string (1- (length total-data)))</eval> other projects
-  </when>
-  <when cond=\"(< first-project-percentile 0.5)\">
-    <var value=\"all-projects-duration\" />
-    in <eval>(number-to-string (length total-data))</eval> projects
-  </when>
-</line>"))
+           . ,(deterred-format
+               (when (> first-project-percentile 0.5)
+                 (f first-project-duration " in " (f-acc "total-data[0]->'name") "; "
+                    other-projects-duration " in " (f-num
+                                                    (1- (length total-data)))
+                    " other projects"))
+               (when (<= first-project-percentile 0.5)
+                 (f all-projects-duration " in " (f-num (length total-data))
+                    " projects"))))
           (:long-description
-           . ,(deterred-inline-template
-                "<trim>
-  Projects: <br>
-  <mapconcat iter=\"total-data\">
-    <line>
-      -
-      <eval>
-        (deterred-utils-duration-from-minutes (alist-get 'total iter))
-      </eval>
-      in
-      <var value=\"iter->'name\" />
-    </line>
-  </mapconcat>
-</trim>")))))))
+           . ,(deterred-format
+               "Projects: \n"
+               (f-mapconcat
+                (f "- " (deterred-utils-duration-from-minutes (alist-get 'total iter))
+                   " in " (f-acc "iter->'name"))
+                total-data
+                "\n"))))))))
 
 (provide 'deterred-wakatime)
 ;;; deterred-wakatime.el ends here

@@ -29,6 +29,7 @@
 (require 'deterred-db)
 (require 'deterred-locations)
 (require 'deterred-source)
+(require 'deterred-format)
 (require 'request)
 (require 'cl-lib)
 
@@ -438,31 +439,18 @@ DB is the sqlite database object."
          . ,(format "%s hours"
                     (deterred-utils-duration-from-minutes total-minutes)))
         (:long-description
-         . ,(deterred-inline-template
-              "<trim>
-  <line>
-    Hostnames:
-    <mapconcat iter=\"hostname-data\" separator=\"; \">
-      <eval>
-        (deterred-utils-duration-from-minutes (alist-get 'total iter))
-      </eval>
-      on
-      <var value=\"iter->'hostname\" />
-    </mapconcat>
-  </line><br>
-  <trim>
-    Top <var value=\"deterred-activitywatch-show-top-in-summary\" convert=\"number-to-string\" /> apps:<br><mapconcat iter=\"app-data\">
-      <line>
-        -
-        <eval>
-          (deterred-utils-duration-from-minutes (alist-get 'total iter))
-        </eval>
-        in
-        <var value=\"iter->'app\" />
-      </line>
-    </mapconcat>
-  </trim>
-</trim>"))))))
+         . ,(deterred-format
+             "Hostnames: "
+             (f-mapconcat
+              (f (deterred-utils-duration-from-minutes (alist-get 'total iter))
+                 " on " (f-acc "iter->'hostname"))
+              hostname-data "; ")
+             "\n"
+             "Top " (f-num deterred-activitywatch-show-top-in-summary) " apps:\n"
+             (f-mapconcat
+              (f "- " (deterred-utils-duration-from-minutes (alist-get 'total iter))
+                 " on " (f-acc "iter->'app"))
+              app-data)))))))
 
 (provide 'deterred-activitywatch)
 ;;; deterred-activitywatch.el ends here

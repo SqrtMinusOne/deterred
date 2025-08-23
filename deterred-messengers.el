@@ -225,22 +225,18 @@ DB is the sqlite database object."
                     (or (car (alist-get 'personal_chat msg-by-type)) 0)
                     (or (cdr (alist-get 'personal_chat msg-by-type)) 0)))
         (:long-description
-         . ,(deterred-inline-template
-              "<trim>
-  Personal chats (received/sent):<br>
-  <mapconcat iter=\"data-by-type->'personal_chat\">
-    <line>
-     - <var value=\"iter->'name\" />: <var value=\"iter->'received\" convert=\"number-to-string\" />/<var value=\"iter->'sent\" convert=\"number-to-string\" />
-    </line>
-  </mapconcat>
-
-Group chats (received/sent):<br>
-  <mapconcat iter=\"data-by-type->'group\">
-    <line>
-     - <var value=\"iter->'name\" />: <var value=\"iter->'received\" convert=\"number-to-string\" />/<var value=\"iter->'sent\" convert=\"number-to-string\" />
-    </line>
-  </mapconcat>
-</trim>"))))))
+         . ,(deterred-format
+             "Personal chats (received/sent):\n"
+             (f-mapconcat
+              (f "- " (f-acc "iter->'name") ": " (f-num (f-acc "iter->'received"))
+                 "/" (f-num (f-acc "iter->'sent")))
+              (f-acc "data-by-type->'personal_chat"))
+             "\n\n"
+             "Group chats (received/sent):\n"
+             (f-mapconcat
+              (f "- " (f-acc "iter->'name") ": " (f-num (f-acc "iter->'received"))
+                 "/" (f-num (f-acc "iter->'sent")))
+              (f-acc "data-by-type->'group"))))))))
 
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
