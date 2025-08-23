@@ -108,7 +108,8 @@ E.g. a->b.c[0]."
 
 (defconst deterred-format-alias-alist
   `((f-acc . deterred-format-accessor)
-    (f-num . number-to-string)))
+    (f-num . number-to-string)
+    (f-join . string-join)))
 
 (defun deterred-format--process-expr-item (item)
   (let* ((item-car (car-safe item))
@@ -118,7 +119,7 @@ E.g. a->b.c[0]."
           ((eq item-car 'f-mapconcat)
            `(mapconcat
              ,(if (eq (car-safe (nth 1 item)) 'lambda)
-                  (car (nth 1 item))
+                  (nth 1 item)
                 `(lambda (iter) ,(deterred-format--process-expr-item
                                   (nth 1 item))))
              ,(deterred-format--process-expr-item (nth 2 item))

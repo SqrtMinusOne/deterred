@@ -265,5 +265,10 @@ and the cdr is the timestamp."
    " "
    (string-trim string)))
 
+(defun deterred-trim-ldots (string max-length)
+  (if (<= (seq-length string) max-length)
+      string
+    (format "%s..." (substring string 0 (- max-length 3)))))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

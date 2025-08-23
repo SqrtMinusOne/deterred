@@ -231,7 +231,7 @@ DB is the sqlite database object."
           (or (caar
                (sqlite-select
                 db "SELECT count(*) FROM mastodon_post
-                    WHERE timestamp BETWEEN ? AND ? AND is_reply = 0"
+                    WHERE timestamp BETWEEN ? AND ? AND is_reply = 1"
                 (list timestamp (+ (* 60 60 24) timestamp))))
               0))
          (unique-servers

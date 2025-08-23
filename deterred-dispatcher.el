@@ -184,6 +184,73 @@ No idea what I'm doing wrong, but this seems to help."
     (setq res (seq-sort-by #'car '> res))
     res))
 
+(defun deterred-dispatcher--day-data (&optional db timestamp)
+  (let ((db (or db (deterred-db--init)))
+        datum)
+    (mapcar
+     (lambda (source)
+       (let ((value (condition-case-unless-debug err
+                        (deterred-source-day-summary source timestamp db)
+                      (error `((:short-description
+                                . ,(propertize (error-message-string err)
+                                               'face 'error))))))
+             (source-name (oref source name)))
+         (when value
+           (setf (alist-get :source value) source)
+           (setf (alist-get source-name datum nil nil #'equal) value))))
+     deterred-sources)
+    (setf (alist-get :description datum)
+          (format-time-string deterred-dispatcher-date-format timestamp))
+    datum))
+
+(defun deterred-dispatcher--render-timestamp (timestamp datum)
+  (magit-insert-section (deterred-dispatcher-on-this-day-day timestamp nil)
+    (insert (propertize
+             (format "%s, %s"
+                     (alist-get :description datum)
+                     (format-time-string deterred-dispatcher-date-format timestamp))
+             'face 'deterred-faces-section-heading-2))
+    (magit-insert-heading)
+    (cl-loop
+     for (source-name . item) in datum
+     unless (symbolp source-name)
+     do (magit-insert-section (deterred-dispatcher-on-this-day-item timestamp t)
+          (insert (format "%s: %s"
+                          (propertize source-name
+                                      'face 'deterred-faces-source-name)
+                          (alist-get :short-description item)))
+          (magit-insert-heading)
+          (when-let (long-description (alist-get :long-description item))
+            (insert long-description "\n"))
+          (when-let (long-description-fn
+                     (alist-get :long-description-fn item))
+            (condition-case-unless-debug err
+                (funcall long-description-fn item)
+              (error (insert (propertize
+                              (concat "Render error: " (error-message-string err))
+                              'face 'error) "\n"))))))
+    (insert "\n")))
+
+(defun deterred-dispatcher-day (timestamp)
+  (interactive (list (time-convert (org-read-date nil t) #'integer)))
+  (let ((datum (deterred-dispatcher--day-data nil timestamp))
+        (buffer-name (format "*DETERRED-<%s>*" (format-time-string "%F" timestamp))))
+    (when-let ((buffer (get-buffer buffer-name)))
+      (kill-buffer buffer))
+    (let ((buffer (get-buffer-create buffer-name)))
+      (switch-to-buffer-other-window buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (setq-local widget-push-button-prefix "")
+          (setq-local widget-push-button-suffix "")
+          (unless (derived-mode-p #'deterred-dispatcher-mode)
+            (deterred-dispatcher-mode))
+          (magit-insert-section (deterred-info)
+            (deterred-dispatcher--render-timestamp timestamp datum)
+            (let ((magit-section-cache-visibility nil))
+              (magit-section-show magit-root-section))))))))
+
 (defun deterred-dispatcher--render-on-this-day (&optional db)
   (let* ((db (or db (deterred-db--init)))
          (data (deterred-dispatcher--on-this-day-data db)))
@@ -192,28 +259,7 @@ No idea what I'm doing wrong, but this seems to help."
       (magit-insert-heading)
       (cl-loop
        for (timestamp . datum) in data
-       do (magit-insert-section (deterred-dispatcher-on-this-day-day timestamp nil)
-            (insert (propertize
-                     (format "%s, %s"
-                             (alist-get :description datum)
-                             (format-time-string deterred-dispatcher-date-format timestamp))
-                     'face 'deterred-faces-section-heading-2))
-            (magit-insert-heading)
-            (cl-loop
-             for (source-name . item) in datum
-             unless (symbolp source-name)
-             do (magit-insert-section (deterred-dispatcher-on-this-day-item timestamp t)
-                  (insert (format "%s: %s"
-                                  (propertize source-name
-                                              'face 'deterred-faces-source-name)
-                                  (alist-get :short-description item)))
-                  (magit-insert-heading)
-                  (when-let (long-description (alist-get :long-description item))
-                    (insert long-description "\n"))
-                  (when-let (long-description-fn
-                             (alist-get :long-description-fn item))
-                    (funcall long-description-fn item))))
-            (insert "\n"))))))
+       do (deterred-dispatcher--render-timestamp timestamp datum)))))
 
 (defun deterred-dispatcher--render-contents ()
   "Render DETERRED dispatcher."

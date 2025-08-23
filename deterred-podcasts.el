@@ -148,5 +148,38 @@ Run CALLBACK when done."
    '(("Load AntennaPod DB" deterred-podcasts-load-antennapod nil))
    callback))
 
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-podcasts) timestamp &optional db)
+  (let* ((db (or db (deterred-db--init)))
+         (podcasts (deterred-db-select-alist
+                    db "SELECT l.*, f.title podcast FROM podcasts_listened l
+                        INNER JOIN podcasts_feed f ON f.id = l.feed_id
+                        WHERE timestamp BETWEEN ? AND ?"
+                    (list timestamp (+ (* 60 60 24) timestamp))))
+         (titles (seq-uniq (mapcar
+                            (lambda (p)
+                              (deterred-trim-ldots
+                               (alist-get 'podcast p)
+                               35))
+                            podcasts))))
+    (when podcasts
+      `((:short-description
+         . ,(deterred-format
+             (if (> (seq-length titles) 2)
+                 (f (f-num (seq-length podcasts)) " podcasts listened")
+               (f
+                (f-join titles ", ")
+                " (" (f-num (seq-length podcasts)) " total)"))))
+        (:long-description
+         . ,(deterred-format
+             (f-mapconcat
+              (f "- " (f-button
+                       (f-acc "iter->'title")
+                       (lambda (&rest _)
+                         (browse-url (alist-get 'url iter))))
+                 (when (> (seq-length titles) 1)
+                   (f " (" (f-acc "iter->'podcast") ")")))
+              podcasts)))))))
+
 (provide 'deterred-podcasts)
 ;;; deterred-podcasts.el ends here

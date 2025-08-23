@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-utils)
+(require 'deterred-format)
 (require 'deterred-source)
 
 (defun deterred-reddit-load-dump (folder)
@@ -106,6 +107,61 @@ Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load Reddit dump folder" deterred-reddit-load-dump nil))
    callback))
+
+(defun deterred-reddit--render-data (posts comments)
+  (dolist (post (append posts comments))
+    (magit-insert-section (deterred-reddit-post t)
+      (insert
+       (deterred-format
+        (propertize
+         (f
+          (format-time-string deterred-dispatcher-time-format
+                              (alist-get 'timestamp post))
+          ": "
+          (if-let (title (alist-get 'title post))
+              (f "\"" title "\"")
+            "comment")
+          " on r/" (alist-get 'subreddit post))
+         'face 'deterred-faces-section-heading-4)))
+      (magit-insert-heading)
+      (when-let ((body (alist-get 'body post)))
+        (insert
+         body "\n"
+         (deterred-format
+          (f-button "[Open]" (lambda (&rest _)
+                               (browse-url (alist-get 'url post)))))
+         "\n\n")))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-reddit) timestamp &optional db)
+  (let* ((db (or db (deterred-db--init)))
+         (posts (deterred-db-select-alist
+                 db "SELECT * FROM reddit_post
+                     WHERE timestamp BETWEEN ? AND ?"
+                 (list timestamp (+ (* 60 60 24) timestamp))))
+         (comments
+          (deterred-db-select-alist
+           db "SELECT * FROM reddit_comment
+                     WHERE timestamp BETWEEN ? AND ?"
+           (list timestamp (+ (* 60 60 24) timestamp))))
+         (comment-subreddits
+          (seq-uniq
+           (mapcar (lambda (c) (format "r/%s" (alist-get 'subreddit c)))
+                   comments))))
+    (when (or posts comments)
+      `((:short-description
+         . ,(deterred-format
+             (when posts
+               (f (f-num (seq-length posts)) " posts"))
+             (when comments
+               (when posts
+                 " and ")
+               (f (f-num (seq-length comments)) " comments"
+                  (if (> (seq-length comment-subreddits) 2)
+                      (f " on " (seq-length comment-subreddits) "subreddits")
+                    (f " on " (f-join comment-subreddits ", ")))))))
+        (:long-description-fn
+         . ,(lambda (&rest _) (deterred-reddit--render-data posts comments)))))))
 
 (provide 'deterred-reddit)
 ;;; deterred-reddit.el ends here

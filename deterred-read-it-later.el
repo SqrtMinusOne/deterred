@@ -299,5 +299,33 @@ SOURCE is the instance of `deterred-read-it-later'."
                  (lambda ()
                    (deterred-source-sync source callback (cdr sources) t)))))))
 
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-read-it-later) timestamp &optional db)
+  (let* ((db (or db (deterred-db--init)))
+         (articles (deterred-db-select-alist
+                    db "SELECT * FROM read_it_later_article
+                        WHERE read_at BETWEEN ? AND ?"
+                    (list timestamp (+ (* 60 60 24) timestamp)))))
+    (when articles
+      `((:short-description
+         . ,(deterred-format
+             (f-num (seq-length articles))
+             " articles read"))
+        (:long-description
+         . ,(deterred-format
+             (f-mapconcat
+              (f (format-time-string deterred-dispatcher-time-format
+                                     (f-acc "iter->'timestamp"))
+                 ": \"" (f-button
+                         (f-acc "iter->'title")
+                         (lambda (&rest _)
+                           (browse-url (alist-get iter 'href))))
+                 "\" on " (f-button
+                           (f-acc "iter->'host")
+                           (lambda (&rest _)
+                             (browse-url (alist-get iter 'url)))))
+              articles))
+         )))))
+
 (provide 'deterred-read-it-later)
 ;;; deterred-read-it-later.el ends here
