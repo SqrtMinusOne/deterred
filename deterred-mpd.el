@@ -239,5 +239,58 @@ end timestamp."
                     FROM mpd_song_listened")))
     (cons (caar data) (cadar data))))
 
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-mpd) timestamp &optional db)
+  (let* ((db (or db (deterred-db--init)))
+         (data (deterred-db-select-alist
+                db "SELECT * FROM mpd_song ms
+                    INNER JOIN mpd_song_listened msl ON msl.mpd_song_id = ms.id
+                    WHERE timestamp BETWEEN ? AND ?"
+                (list timestamp (+ (* 60 60 24) timestamp))))
+         (time-total (apply #'+ (mapcar (lambda (d) (alist-get 'duration d)) data)))
+         (time-by-artist
+          (deterred-db-select-alist
+           db "SELECT ms.album_artist, sum(ms.duration) duration FROM mpd_song ms
+               INNER JOIN mpd_song_listened msl ON msl.mpd_song_id = ms.id
+               WHERE timestamp BETWEEN ? AND ?
+               GROUP BY ms.album_artist
+               ORDER BY duration DESC"
+           (list timestamp (+ (* 60 60 24) timestamp))))
+         (time-by-album
+          (deterred-db-select-alist
+           db "SELECT
+                 ms.album || ' (' || ms.album_artist || ')' album,
+                 sum(ms.duration) duration,
+                 min(msl.timestamp) started
+               FROM mpd_song ms
+               INNER JOIN mpd_song_listened msl ON msl.mpd_song_id = ms.id
+               WHERE timestamp BETWEEN ? AND ?
+               GROUP BY ms.album_artist, ms.album
+               ORDER BY started ASC"
+           (list timestamp (+ (* 60 60 24) timestamp)))))
+    (when data
+      `((:short-description
+         . ,(deterred-format
+             (deterred-utils-duration-from-minutes (/ time-total 60.0))
+             ": "
+             (f (f-acc "time-by-artist[0]->'album_artist")
+                " (" (deterred-utils-duration-from-minutes
+                      (/ (f-acc "time-by-artist[0]->'duration") 60.0)) ")"
+                (when (> (seq-length time-by-artist) 1)
+                  (f ", " (f-acc "time-by-artist[1]->'album_artist")
+                     " (" (deterred-utils-duration-from-minutes
+                           (/ (f-acc "time-by-artist[0]->'duration") 60.0)) ")"))
+                (when (> (seq-length time-by-artist) 2)
+                  (f " and " (f-num (- (seq-length time-by-artist) 2)) " others")))))
+        (:long-description
+         . ,(deterred-format
+             "Albums listened:\n"
+             (f-mapconcat
+              (f "- " (f-acc "iter->'album") " ("
+                 (deterred-utils-duration-from-minutes
+                  (/ (f-acc "iter->'duration") 60.0))
+                 ")")
+              time-by-album)))))))
+
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

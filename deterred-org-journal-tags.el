@@ -158,5 +158,27 @@ Call CALLBACK when done."
   (when callback
     (funcall callback)))
 
+(defun deterred-org-journal-tags--render-refs (refs)
+  (dolist (ref refs)
+    (magit-insert-section (deterred-org-journal-item t)
+      (insert
+       (propertize
+        (org-journal-tag-reference-time ref)
+        'face 'deterred-faces-section-heading-4))
+      (magit-insert-heading)
+      (insert (org-journal-tags--extract-ref ref) "\n"))))
+
+(cl-defmethod deterred-source-day-summary
+  ((_source deterred-org-journal-tags) timestamp &optional _db)
+  (let ((refs (org-journal-tags-query
+               :start-date timestamp
+               :end-date (+ (* 60 60 24) timestamp (- 1)))))
+    (when refs
+      `((:short-description
+         . ,(deterred-format (f-num (seq-length refs)) " "
+                             (if (= (seq-length refs) 1) "record" "records ")))
+        (:long-description-fn
+         . ,(lambda (&rest _) (deterred-org-journal-tags--render-refs refs)))))))
+
 (provide 'deterred-org-journal-tags)
 ;;; deterred-org-journal-tags.el ends here

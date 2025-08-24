@@ -231,11 +231,11 @@ package."
 
 (defun deterred-utils-ts-to-day-start (&optional timestamp)
   "Move TIMESTAMP to start of day."
-  (* 24 60 60
-     (-
-      (time-to-days timestamp)
-      (time-to-days 0))))
-
+  (let ((time (decode-time timestamp)))
+    (setf (decoded-time-second time) 0
+          (decoded-time-minute time) 0
+          (decoded-time-hour time) 0)
+    (time-convert (encode-time time) #'integer)))
 
 (defun deterred-utils-get-this-day (start &optional today)
   "Get TODAY on all years since START.
