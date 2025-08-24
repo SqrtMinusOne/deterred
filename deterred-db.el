@@ -49,6 +49,9 @@
     file varchar(255) primary key
   )")
 
+(defvar deterred-db--conn nil
+  "The SQLite connection object.")
+
 (defun deterred-db--escape (string)
   "Escape STRING for sqlite.
 
@@ -104,24 +107,34 @@ DB is a sqlite database object.  PENDING is a list of migrations."
           (sqlite-execute db statement))
         (sqlite-execute db "insert into meta_db_migrations values (?)" (list file))))))
 
-(defun deterred-db--init ()
-  "Initialize the `deterred' database.  Return a sqlite object."
-  (let* ((db-loc (expand-file-name deterred-db-location))
-         (db-dir (directory-file-name
-                  (file-name-directory db-loc)))
-         (backups-dir
-          (directory-file-name
-           (file-name-directory
-            (expand-file-name deterred-db-backups-location)))))
-    (mkdir db-dir t)
-    (mkdir backups-dir t)
-    (let ((db (sqlite-open db-loc)))
-      (sqlite-pragma db "foreign_keys = ON")
-      (unless (deterred-db--is-initialized db)
-        (sqlite-execute db deterred-db--query-create-version-table))
-      (deterred-db--migrations-execute
-       db (deterred-db--migrations-get-pending db))
-      db)))
+(defun deterred-db--init (&optional force-reconnect)
+  "Initialize the `deterred' database.  Return a sqlite object.
+
+If FORCE-RECONNECT is t, create a new connection.  Otherwise, reusing
+the existing one.
+
+In principle, unused connections should be garbage collected, but I'm
+not sure they do because I've had the \"too many open files\" error a
+few times.  Hence this approach."
+  (if (and deterred-db--conn (not force-reconnect))
+      deterred-db--conn
+    (let* ((db-loc (expand-file-name deterred-db-location))
+           (db-dir (directory-file-name
+                    (file-name-directory db-loc)))
+           (backups-dir
+            (directory-file-name
+             (file-name-directory
+              (expand-file-name deterred-db-backups-location)))))
+      (mkdir db-dir t)
+      (mkdir backups-dir t)
+      (let ((db (sqlite-open db-loc)))
+        (sqlite-pragma db "foreign_keys = ON")
+        (unless (deterred-db--is-initialized db)
+          (sqlite-execute db deterred-db--query-create-version-table))
+        (deterred-db--migrations-execute
+         db (deterred-db--migrations-get-pending db))
+        (setq deterred-db--conn db)
+        db))))
 
 (defun deterred-db--mark-updated (db table-name)
   "Mark TABLE-NAME as updated.
