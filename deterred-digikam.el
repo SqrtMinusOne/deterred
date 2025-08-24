@@ -36,6 +36,14 @@
   "Gallery root for digiKam."
   :group 'deterred-sources)
 
+(defcustom deterred-digikam-thumbnail-folder "~/.deterred/thumbnails/"
+  "Thumbnail folder for DETERRED."
+  :group 'deterred-sources)
+
+(defcustom deterred-digikam-thumbnail-size 60
+  "Thumbnail size in pixels."
+  :group 'deterred-sources)
+
 (defun deterred-digikam--get-data (db digikam-db)
   "Read data from DIGIKAM-DB.
 
@@ -108,7 +116,7 @@ is the sqlite database object."
     (deterred-db-cleanup-unsafe
      db 'digikam_photo 'id
      (mapcar (lambda (s) (alist-get 'id s)) photo-data))
-    (deterred-db--mark-update-batch
+    (deterred-db-mark-updated-batch
      db
      '(digikam_album digikam_photo))))
 
@@ -157,6 +165,24 @@ SOURCE is an instance of `deterred-digikam'."
   (deterred-digikam-load (oref source digikam-db))
   (when callback (funcall callback)))
 
+(defun deterred-digikam-make-thumbnail (id img-path)
+  "Make a thumbnail for IMG-PATH.  ID is the unique ID of the image.
+
+This is neccessary because displaying a lot of large images slows
+Emacs down quite a bit."
+  (let ((thumbnail-path (concat
+                         (expand-file-name
+                          (file-name-as-directory deterred-digikam-thumbnail-folder))
+                         (number-to-string id)
+                         ".jpg")))
+    (unless (file-exists-p thumbnail-path)
+      (mkdir deterred-digikam-thumbnail-folder t)
+      (call-process "convert" nil nil nil img-path "-thumbnail"
+                    (format "x%s" deterred-digikam-thumbnail-size
+                            deterred-digikam-thumbnail-size)
+                    thumbnail-path))
+    thumbnail-path))
+
 (defun deterred-digikam--show-gallery (button)
   (let* ((db (deterred-db--init))
          (timestamp (oref (magit-section-at) value))
@@ -175,7 +201,11 @@ SOURCE is an instance of `deterred-digikam'."
       (insert
        (deterred-format
         (f-mapconcat
-         (f-img (f-acc "iter->'path") :max-height 60)
+         (f-img (deterred-digikam-make-thumbnail
+                 (f-acc "iter->'id")
+                 (f-acc "iter->'path"))
+                :max-height deterred-digikam-thumbnail-size
+                :actual-path (alist-get 'path iter))
          photos "")))
       (let ((next-button (next-button (point))))
         (when (string= "(Show all)" (button-label next-button))
@@ -201,7 +231,9 @@ SOURCE is an instance of `deterred-digikam'."
 
 (cl-defmethod deterred-source-day-summary
   ((_source deterred-digikam) timestamp &optional db)
-  "Make digiKam summary for TIMESTAMP."
+  "Make digiKam summary for TIMESTAMP.
+
+DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
          (total-photos
           (or (caar (sqlite-select

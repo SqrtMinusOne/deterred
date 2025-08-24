@@ -138,7 +138,7 @@ DB is the sqlite database object."
             (alist-get 'projects day))
            (message "Processed: %s" (alist-get 'date day))))
        (alist-get 'days data))
-      (deterred-db--mark-update-batch
+      (deterred-db-mark-updated-batch
        db
        (append
         (mapcar (lambda (f) (format "wakatime_%s" (car f)))
@@ -229,7 +229,7 @@ large value and download everything, but I haven't tried this."
                     db (alist-get 'date (alist-get 'range day-in-project))
                     day-in-project))
                  (alist-get 'data project-data)))
-              (deterred-db--mark-update-batch
+              (deterred-db-mark-updated-batch
                db
                (append
                 (mapcar (lambda (f) (format "wakatime_%s" (car f)))

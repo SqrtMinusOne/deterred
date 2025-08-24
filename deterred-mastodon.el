@@ -101,7 +101,7 @@ If STOP-ID is encountered, stop."
            db :table-name 'mastodon_post_mention
            :values post-mentions
            :conflict-action 'do-nothing)
-          (deterred-db--mark-update-batch
+          (deterred-db-mark-updated-batch
            db
            '(mastodon_post mastodon_account mastodon_post_mention)))))
     max-id))

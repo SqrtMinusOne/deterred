@@ -128,7 +128,7 @@ DB is the sqlite database object, used to determine the timezones."
        :values (nth 1 tags-and-records)
        :conflict-action 'do-nothing
        :conflict-attrs '(record_id tag_id))
-      (deterred-db--mark-update-batch
+      (deterred-db-mark-updated-batch
        db
        '(org_journal_record org_journal_tag org_journal_record_tag)))))
 

@@ -1,4 +1,4 @@
-;;; deterred-activitywatch.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-activitywatch.el --- ActivityWatch integration for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 
@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 
-;; TODO
+;; ActivityWatch integration for DETERRED.
 
 ;;; Code:
 (require 'deterred-db)
@@ -84,7 +84,7 @@ EVENTS is a list of events from the ActivityWatch API."
            :values values
            :conflict-action 'do-nothing
            :conflict-attrs '(hostname notafk_start_timestamp notafk_end_timestamp))
-          (deterred-db--mark-updated db 'activitywatch_notafk_period)))
+          (deterred-db-mark-updated db 'activitywatch_notafk_period)))
       (message "Saved %d not-AFK periods from %s" (length values) hostname))))
 
 (defun deterred-activitywatch--bucket-load-afk (bucket-id hostname &optional callback)
@@ -291,7 +291,8 @@ returned by the ActivityWatch API."
          :table-name 'activitywatch_currentwindow_agg
          :values data
          :conflict-action 'do-update
-         :conflict-attrs '(day hostname app))))))
+         :conflict-attrs '(day hostname app))
+        (deterred-db-mark-updated db 'activitywatch_currentwindow_agg)))))
 
 (defun deterred-activitywatch--load-currentwindow
     (bucket-id hostname &optional created-at callback days)

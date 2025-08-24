@@ -5,7 +5,7 @@
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (requests "0.3.2") (transient "0.9.2") (magit-section "4.3.6"))
+;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (requests "0.3.2") (transient "0.9.2") (magit-section "4.3.6") (org "9.6.6"))
 ;; Homepage: https://github.com/SqrtMinusOne/deterred.el
 
 ;; This file is NOT part of GNU Emacs.

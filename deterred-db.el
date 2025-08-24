@@ -1,4 +1,4 @@
-;;; deterred-db.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-db.el --- Database interface for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 
@@ -23,7 +23,23 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Database interface for DETERRED.
+;;
+;; To initialise the database, call `deterred-db--init'.  It will
+;; execute all new migrations in `deterred-db-migrations-location' and
+;; return the database object.
+;;
+;; The connection is initialised only once, but some parts of the
+;; package pass the database object between function calls anyway.
+;;
+;; To implement sync, the database stores table update times in the
+;; meta_table_updates folder.  Set these with
+;; `deterred-db-mark-updated' and `deterred-db-mark-updated-batch'.
+;;
+;; Some other useful functions:
+;; - `deterred-db-insert-unsafe' to insert data;
+;; - `deterred-db-cleanup-unsafe' to delete data;
+;; - `deterred-db-select-alist' to select rows into alists.
 
 ;;; Code:
 (require 'seq)
@@ -31,11 +47,6 @@
 
 (defcustom deterred-db-location "~/.deterred/database.db"
   "The path to file where the Deterred database is stored."
-  :group 'deterred
-  :type 'string)
-
-(defcustom deterred-db-backups-location "~/.deterred/backups/"
-  "The path to where the backups are stored.  Change this."
   :group 'deterred
   :type 'string)
 
@@ -136,7 +147,7 @@ few times.  Hence this approach."
         (setq deterred-db--conn db)
         db))))
 
-(defun deterred-db--mark-updated (db table-name)
+(defun deterred-db-mark-updated (db table-name)
   "Mark TABLE-NAME as updated.
 
 TABLE-NAME is either string or symbol.  DB is the sqlite database
@@ -150,12 +161,12 @@ object."
          DO UPDATE SET last_updated = unixepoch(CURRENT_TIMESTAMP)"
    (list table-name)))
 
-(defun deterred-db--mark-update-batch (db table-names)
+(defun deterred-db-mark-updated-batch (db table-names)
   "Mark TABLE-NAMES as updated.
 
 TABLE-NAMES is a list of strings or symbols.  DB is the sqlite
 database object."
-  (mapcar (lambda (name) (deterred-db--mark-updated
+  (mapcar (lambda (name) (deterred-db-mark-updated
                           db name))
           table-names))
 

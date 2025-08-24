@@ -115,7 +115,7 @@ instance."
            values)))
     (with-sqlite-transaction db
       (sqlite-execute db query)
-      (deterred-db--mark-updated db "mpd_song"))))
+      (deterred-db-mark-updated db "mpd_song"))))
 
 (defun deterred-mpd-update-library ()
   "Update MPD songs in the DETERRED database."
@@ -189,7 +189,7 @@ The columns of the file have to match the input of
                             collect (cons key value))
        do (deterred-mpd--migrate--upsert-song-listened datum db)
        do (message "Processed: %s/%s" i total))
-      (deterred-db--mark-updated db "mpd_song_listened"))))
+      (deterred-db-mark-updated db "mpd_song_listened"))))
 
 (defun deterred-mpd-migrate-fix-timestamp ()
   (interactive)

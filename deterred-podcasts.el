@@ -120,7 +120,7 @@ FILE is the path to the database."
     (sqlite-pragma antennapod-db "foreign_keys = ON")
     (with-sqlite-transaction db
       (deterred-podcasts--antennapod-load-listened db antennapod-db)
-      (deterred-db--mark-update-batch
+      (deterred-db-mark-updated-batch
        db '(podcasts_listened podcasts_feed)))))
 
 (defclass deterred-podcasts (deterred-source)

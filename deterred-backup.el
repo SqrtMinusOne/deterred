@@ -1,4 +1,4 @@
-;;; deterred-backup.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-backup.el --- Backup functionality for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 
@@ -23,10 +23,22 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Database backup functionality for DETERRED.
+;;
+;; The backups stored at `deterred-backups-location'.  You probably
+;; want to set this to some encrypted cloud storage.  Configure
+;; `deterred-backup-keep' to set for how long to keep these.
+;;
+;; To make backups, call `deterred-backup' (interactive).  Use
+;; `deterred-backups-last' to get the last backup time.
 
 ;;; Code:
 (require 'deterred-db)
+
+(defcustom deterred-backups-location "~/.deterred/backups/"
+  "The path to where the backups are stored.  Change this."
+  :group 'deterred
+  :type 'string)
 
 (defcustom deterred-backup-keep
   '((daily . 5)
@@ -158,8 +170,27 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
   (interactive)
   (deterred-backup--backup
    (expand-file-name deterred-db-location)
-   (expand-file-name deterred-db-backups-location)
+   (expand-file-name deterred-backups-location)
    deterred-backup-keep))
+
+(defun deterred-backup--last (file backups-dir)
+  "Get the time of last backup of FILE into BACKUPS-DIR."
+  (let* ((file-name (file-name-nondirectory file))
+         (source-files
+          (directory-files
+           backups-dir t
+           (rx (literal file-name) "."))))
+    (seq-max (mapcar (lambda (f)
+                       (time-convert
+                        (nth 5 (file-attributes f))
+                        #'integer))
+                     source-files))))
+
+(defun deterred-backups-last ()
+  "Get the last backup time of the DETERRED database."
+  (deterred-backup--last
+   deterred-db-location
+   deterred-backups-location))
 
 (provide 'deterred-backup)
 ;;; deterred-backup.el ends here

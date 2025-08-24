@@ -80,7 +80,7 @@
          :values comments-data
          :conflict-action 'do-update
          :conflict-attrs '(id))
-        (deterred-db--mark-update-batch
+        (deterred-db-mark-updated-batch
          db '(reddit_post reddit_comment))))))
 
 (defclass deterred-reddit (deterred-source)

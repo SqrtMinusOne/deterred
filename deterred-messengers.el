@@ -147,7 +147,7 @@ dump."
                  for i from 0
                  do (deterred-messengers--telegram-process-chat db chat my-telegram-id)
                  do (message "Processed %s/%s chats" i total)))
-      (deterred-db--mark-update-batch
+      (deterred-db-mark-updated-batch
        db
        '(messenger_chat messenger_user messenger_message)))))
 

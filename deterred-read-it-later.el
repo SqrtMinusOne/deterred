@@ -233,7 +233,7 @@ TODO document RESULTS."
        :table-name 'read_it_later_article
        :values results
        :conflict-action 'do-nothing)
-      (deterred-db--mark-updated db 'read_it_later_article))))
+      (deterred-db-mark-updated db 'read_it_later_article))))
 
 (defun deterred-read-it-later-readeck-sync (&optional callback)
   "Sync Readeck with DETERRED.

@@ -1,4 +1,4 @@
-;;; deterred-source.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-source.el --- Abstract class for data source for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,7 +23,18 @@
 
 ;;; Commentary:
 
-;; TODO
+;; DETERRED is connected to external data via data sources, which are
+;; subclasses of `deterred-source', implemented here.  A data source
+;; does two things:
+;; - Inject data into the database
+;; - Present some of it ot the user
+;;
+;; Injecting is implemented via `deterred-source-sync'.  If it's
+;; possible to call, `deterred-source-sync-p' must return a non-nil
+;; value.
+;;
+;; `deterred-source-day-summary' implements summary for the "on this
+;; day" interface.
 
 ;;; Code:
 (require 'eieio)
@@ -87,7 +98,12 @@ Call CALLBACK when done.")
 Return an alist with the following keys:
 - `:short-description'
 - `:long-description'
-All can be nil.")
+- `:long-description-fn'
+All can be nil.
+
+If `:long-description-fn' is non-nil, it will be used instead of
+`long-description'.  This is useful when the description doesn't fit
+into string, e.g., it needs to call `magit-insert-section'.")
 
 (cl-defmethod deterred-source-day-summary ((_source deterred-source) _timestamp &optional _db)
   "A dummy implementation of `deterred-source-day-summary'."

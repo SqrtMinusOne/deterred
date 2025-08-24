@@ -136,8 +136,9 @@ E.g. a->b.c[0]."
                (button--properties
                 (lambda (&rest _)
                   (funcall deterred-format-image-open-command
-                           ,(deterred-format--process-expr-item
-                             (nth 1 item))))
+                           (or (image-property img :actual-path)
+                               ,(deterred-format--process-expr-item
+                                 (nth 1 item)))))
                 nil nil))))
           ((eq item-car 'f-button)
            `(apply #'propertize
