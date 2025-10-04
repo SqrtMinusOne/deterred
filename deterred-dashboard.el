@@ -122,8 +122,7 @@ PARAMS is an alist of parameters.")
   (outline-minor-mode 1))
 
 (defun deterred-dashboard--render-actions ()
-  (insert (deterred-format
-           (f-ace "* Actions" 'deterred-faces-section-heading-1) "\n"))
+  (insert (deterred-format (f-h1 "Actions") "\n"))
   (widget-create 'push-button
                  :notify (lambda (&rest _)
                            (deterred-dashboard-refresh))
@@ -133,7 +132,7 @@ PARAMS is an alist of parameters.")
 (defun deterred-dashboard--render-datasets (name data)
   (insert
    (deterred-format
-    (f-ace "* Datasets" 'deterred-faces-section-heading-1) "\n"
+    (f-h1 "Datasets") "\n"
     (f-mapconcat
      (f "- " (alist-get 'name iter)
         (when (alist-get 'tags iter)
@@ -163,7 +162,7 @@ PARAMS is an alist of parameters.")
 (defun deterred-dashboard--render-results (dashboard data)
   (insert
    (deterred-format
-    (f-ace "* Results" 'deterred-faces-section-heading-1) "\n"))
+    (f-h1 "Results") "\n"))
   (deterred-dashboard-render-results dashboard data))
 
 (defun deterred-dashboard-refresh ()
@@ -218,7 +217,7 @@ DASHBOARD is a dashboard object."
       (when params
         (insert
          (deterred-format
-          (f-ace "* Parameters" 'deterred-faces-section-heading-1) "\n"))
+          (f-h1 "* Parameters") "\n"))
         (deterred-dashboard-render-params dashboard))
       (deterred-dashboard--render-actions)
       (deterred-dashboard-refresh)
@@ -253,6 +252,25 @@ DASHBOARD is a dashboard object."
     "Error: " (prin1-to-string err) "\n"
     output
     "\n\n")))
+
+(defun deterred-dashboard-print-images-base64 (images &rest props)
+  (unless (sequencep images)
+    (setq images (list images)))
+  (insert
+   (mapconcat
+    (lambda (image)
+      (condition-case-unless-debug err
+          (let* ((data (base64-decode-string image))
+                 (img (apply #'create-image
+                             data nil t props)))
+            (if (image-type-available-p (image-property img :type))
+                (propertize "[IMG]" 'display img)
+              "[IMG]"))
+        (error (deterred-format
+                (f-ace "Error: " 'error)
+                (prin1-to-string err)))))
+    images
+    "\n")))
 
 (cl-defun deterred-dashboard-exec-python
     (&key python-code python-file

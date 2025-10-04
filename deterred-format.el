@@ -133,6 +133,15 @@ E.g. a->b.c[0]."
              ,(deterred-format--process-expr-item
                (nth 1 item))
              'face ,(nth 2 item)))
+          ((member item-car '(f-h1 f-h2 f-h3 f-h4))
+           (let* ((level (string-to-number (substring (symbol-name item-car) 3 4)))
+                  (face (intern (format "deterred-faces-section-heading-%s" level))))
+             `(propertize
+               (concat
+                (make-string ,level ?*) " "
+                ,(deterred-format--process-expr-item
+                  (nth 1 item)))
+               'face ',face)))
           ((or (eq item-car 'f-img)
                (eq item-car 'f-img-data))
            `(let ((img (create-image ,(deterred-format--process-expr-item

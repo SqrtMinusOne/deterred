@@ -291,15 +291,15 @@ VALUE.  Display COMMENT if passed."
           (with-current-buffer buf
             (insert
              (deterred-format
-              (f-ace "* Schema validation error" 'deterred-faces-section-heading-1)
+              (f-h1 "Schema validation error")
               "\n\n"
-              (f-ace "** Report" 'deterred-faces-section-heading-2)
+              (f-h2 "Report")
               "\n" report
               "\n\n"
               (when comment
-                (f (f-ace "** Comment" 'deterred-faces-section-heading-2)
+                (f (f-h2 "Comment")
                    "\n" comment "\n\n"))
-              (f-ace "** Backtrace" 'deterred-faces-section-heading-2)
+              (f-h2 "Backtrace")
               "\n" (backtrace-to-string)))
             (goto-char (point-min))
             (deterred-utils-report-mode))
