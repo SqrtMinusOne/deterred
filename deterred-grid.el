@@ -1,4 +1,4 @@
-;;; deterred-grid.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-grid.el --- Displaying grids for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,9 +23,13 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Some functions to work with grids, namely:
+;; - `deterred-grid-show' - display a list of alists with `vtable'
+;; - `deterred-grid-print-with-org' - display a list of alists like an
+;;   org table.
 
 ;;; Code:
+(require 'org)
 (require 'vtable)
 
 (define-derived-mode deterred-grid-mode special-mode "DETERRED Grid"
@@ -65,6 +69,57 @@ DATA is a list of alists, VTABLE-ARGS is passed to `make-vtable'."
                :use-header-line nil
                vtable-args)))
     (switch-to-buffer-other-window buffer)))
+
+(cl-defun deterred-grid-print-with-org (data &key grid-button column-names max-rows
+                                             max-column-width)
+  "Display DATA with an `org-mode' table.
+
+If GRID-BUTTON is non-nil, show a button to view DATA with
+`deterred-grid-show'.
+
+If COLUMN-NAMES is passed, use that instead of alist keys for the
+column names.
+
+If MAX-ROWS is passed, truncate the table row count.  If
+MAX-COLUMN-WIDTH is passed, truncate the column names with
+`truncate-string-to-width'."
+  (let ((columns (mapcar #'car (car data))))
+    (with-temp-buffer
+      (let (org-mode-hook)
+        (org-mode))
+      (insert "| "
+              (mapconcat
+               (lambda (col)
+                 (let ((name (or (alist-get col column-names)
+                                 (symbol-name col))))
+                   (when max-column-width
+                     (setq name (truncate-string-to-width name max-column-width
+                                                          nil nil t)))
+                   name))
+               columns " | ")
+              " |\n")
+      (insert "|--\n")
+      (mapc (lambda (datum)
+              (insert "| "
+                      (mapconcat (lambda (col)
+                                   (let ((item (alist-get col datum)))
+                                     (cond
+                                      ((numberp item) (number-to-string item))
+                                      ((stringp item) item)
+                                      (t (prin1-to-string item)))))
+                                 columns
+                                 " | ")
+                      " |\n"))
+            (if max-rows (take max-rows data) data))
+      (goto-char (point-min))
+      (org-table-align)
+      (goto-char (point-max))
+      (when grid-button
+        (insert (deterred-format
+                 (f-button "[View table]"
+                           (lambda (&rest _)
+                             (deterred-grid-show data))))))
+      (string-trim (buffer-string)))))
 
 (provide 'deterred-grid)
 ;;; deterred-grid.el ends here

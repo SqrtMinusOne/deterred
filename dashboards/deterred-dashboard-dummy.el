@@ -64,18 +64,39 @@
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-dummy)
                                                  data)
+  (insert (deterred-format (f-h2 "Example error") "\n"))
   (deterred-dashboard-exec-python
    :python-code
    "oh no")
+  (insert (deterred-format (f-h2 "Example image") "\n"))
   (deterred-dashboard-exec-python
    :python-code
-   "import json
+   "from matplotlib import pyplot as plt
+import pandas as pd
+
+import json
+import os
+import base64
+import io
 
 data = json.loads(input())
-print(json.dumps({'data': data['bar']['data']}))
-"
+df_foo = pd.DataFrame(data['foo']['data'])
+
+fig, ax = plt.subplots(figsize=(8, 5))
+df_foo.plot(ax=ax, kind='scatter', x='a', y='b')
+ax.set_title('Foo plot')
+
+buf = io.BytesIO()
+plt.tight_layout()
+plt.savefig(buf, format='png')
+img = base64.b64encode(buf.getvalue()).decode()
+print(json.dumps([img]))"
    :input data
-   :on-success (lambda (data)
-                 (insert (prin1-to-string data)))))
+   :on-success #'deterred-dashboard-print-images-base64)
+  (insert "\n")
+  (insert (deterred-format (f-h2 "Example table") "\n")
+          (deterred-grid-print-with-org (alist-get 'data (alist-get 'foo data))
+                                        :max-rows 10
+                                        :grid-button t)))
 
 (provide 'deterred-dashboard-dummy)
