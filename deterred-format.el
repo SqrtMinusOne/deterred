@@ -1,4 +1,4 @@
-;;; deterred-format.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-format.el --- Simplify making formatted strings -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,11 +23,12 @@
 
 ;;; Commentary:
 
-;; TODO
+;; A package to make formatted strings more concisely than by just
+;; chaining functions like `concat', `format', etc.  `deterred-format'
+;; is the main entrypoint.
 
 ;;; Code:
 (require 'button)
-(require 'outline)
 (require 'browse-url)
 
 (defconst deterred-format--alist-nest-symbol "->")
@@ -39,7 +40,9 @@
   :group 'deterred)
 
 (defun deterred-format--parse-accessor-expr (accessor)
-  "Parse an ACCESSOR expression."
+  "Parse an ACCESSOR expression.
+
+See `deterred-format-accessor' for details."
   (let ((regexp (rx (| (literal deterred-format--alist-nest-symbol)
                        (literal deterred-format--plist-nest-symbol)
                        (:
@@ -112,6 +115,7 @@ E.g. a->b.c[0]."
     (f-join . string-join)))
 
 (defun deterred-format--process-expr-item (item)
+  "Process a `deterred-format' expression ITEM."
   (let* ((item-car (car-safe item))
          (item-alias (alist-get item-car deterred-format-alias-alist)))
     (cond ((eq item-car 'f)
@@ -124,10 +128,17 @@ E.g. a->b.c[0]."
                                   (nth 1 item))))
              ,(deterred-format--process-expr-item (nth 2 item))
              ,(or (nth 3 item) "\n")))
-          ((eq item-car 'f-img)
+          ((eq item-car 'f-ace)
+           `(propertize
+             ,(deterred-format--process-expr-item
+               (nth 1 item))
+             'face ,(nth 2 item)))
+          ((or (eq item-car 'f-img)
+               (eq item-car 'f-img-data))
            `(let ((img (create-image ,(deterred-format--process-expr-item
                                        (nth 1 item))
-                                     nil nil ,@(cddr item))))
+                                     nil (eq item-car 'f-img-data)
+                                     ,@(cddr item))))
               (apply
                #'propertize
                (if (image-type-available-p (image-property img :type))
@@ -152,9 +163,42 @@ E.g. a->b.c[0]."
           (t item))))
 
 (defun deterred-format--process-expr (expr)
+  "Produce a formatted string from EXPR.
+
+See `deterred-format' for more."
   (mapcar #'deterred-format--process-expr-item expr))
 
 (defmacro deterred-format (&rest expr)
+  "Produce a formatted string from EXPR.
+
+EXPR is a normal elisp expression with several shorthands added for
+convinience.  The macro wraps it in `concat'.
+
+The following aliases are added:
+- `f' - a nested `deterred-format' expression.
+- `f-acc' - `deterred-format-accessor', which see.
+- `f-num' - `number-to-string'
+- `f-join' - `string-join'.
+
+`f-mapconcat' concats iteration results into string.  The first
+argument is either a lambda, in which case it is taken literally, or
+another `deterred-format' expression.  The second argument is a
+`deterred-format' expression (can be a variable, for instance).  The
+third argument is a separator, which is a linebreak by default.
+
+`f-ace' applies face to the child expression.  The first argument is a
+`deterred-format' expression, the second argument is the face name.
+
+`f-img' and `f-img-data' make an image.  The first argument is a
+`deterred-format' expression, which must evaluate to the image path or
+the data string respectively.  Other arguments are passed to
+`create-image', which see.  Clicking on the image opens it with
+`deterred-format-image-open-command'.
+
+`f-button' creates a button.  The first argument is the button text,
+the second argument is the callback function.
+
+Everything else is unchanged."
   `(concat
     ,@(deterred-format--process-expr expr)))
 
