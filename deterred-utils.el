@@ -27,6 +27,9 @@
 
 ;;; Code:
 (require 'pcsv)
+(require 'validate)
+
+(require 'deterred-format)
 
 (defcustom deterred-utils-duration-format '(("d") (special . h:mm))
   "Format defintion for a duration.
@@ -258,6 +261,51 @@ and the cdr is the timestamp."
                   (time-convert (encode-time time) #'integer))
             res))
     (nreverse res)))
+
+(defvar deterred-utils-report-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") (lambda ()
+                                (interactive)
+                                (quit-window t)))
+    (when (fboundp #'evil-define-key*)
+      (evil-define-key* '(normal motion) map
+        "q" (lambda ()
+              (interactive)
+              (quit-window t))))
+    map)
+  "A keymap for `deterred-utils-report-mode'.")
+
+(define-derived-mode deterred-utils-report-mode special-mode "DETERRED Report"
+  :group 'deterred
+  (setq-local buffer-read-only t)
+  (outline-minor-mode 1))
+
+(defun deterred-utils-validate (value schema &optional comment)
+  "Validate VALUE against SCHEMA.
+
+Pop an error in a new buffer if there's an error, otherwise return
+VALUE.  Display COMMENT if passed."
+  (let ((report (validate--check value schema)))
+    (if report
+        (let ((buf (generate-new-buffer "*deterred-error-report*")))
+          (with-current-buffer buf
+            (insert
+             (deterred-format
+              (f-ace "* Schema validation error" 'deterred-faces-section-heading-1)
+              "\n\n"
+              (f-ace "** Report" 'deterred-faces-section-heading-2)
+              "\n" report
+              "\n\n"
+              (when comment
+                (f (f-ace "** Comment" 'deterred-faces-section-heading-2)
+                   "\n" comment "\n\n"))
+              (f-ace "** Backtrace" 'deterred-faces-section-heading-2)
+              "\n" (backtrace-to-string)))
+            (goto-char (point-min))
+            (deterred-utils-report-mode))
+          (display-buffer buf)
+          (user-error "Schema validation error"))
+      value)))
 
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here
