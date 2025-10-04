@@ -131,13 +131,8 @@ few times.  Hence this approach."
       deterred-db--conn
     (let* ((db-loc (expand-file-name deterred-db-location))
            (db-dir (directory-file-name
-                    (file-name-directory db-loc)))
-           (backups-dir
-            (directory-file-name
-             (file-name-directory
-              (expand-file-name deterred-db-backups-location)))))
+                    (file-name-directory db-loc))))
       (mkdir db-dir t)
-      (mkdir backups-dir t)
       (let ((db (sqlite-open db-loc)))
         (sqlite-pragma db "foreign_keys = ON")
         (unless (deterred-db--is-initialized db)
