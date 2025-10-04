@@ -158,9 +158,9 @@ Run CALLBACK when done."
                     (list timestamp (+ (* 60 60 24) timestamp))))
          (titles (seq-uniq (mapcar
                             (lambda (p)
-                              (deterred-trim-ldots
+                              (truncate-string-to-width
                                (alist-get 'podcast p)
-                               35))
+                               35 nil nil t))
                             podcasts))))
     (when podcasts
       `((:short-description

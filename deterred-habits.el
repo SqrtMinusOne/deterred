@@ -134,7 +134,7 @@ SOURCE is an instance of `deterred-habits'."
           (list timestamp (+ (* 60 60 24) timestamp)))))
     (when habits
       `((:short-description
-         . ,(format "% records" (seq-length habits)))
+         . ,(format "%d records" (seq-length habits)))
         (:long-description
          . ,(deterred-format
              (f-mapconcat (f "- " (f-acc "iter->'habit")) habits)))))))

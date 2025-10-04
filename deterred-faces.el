@@ -62,5 +62,9 @@
   "Face for dates."
   :group 'deterred-faces)
 
+(defface deterred-faces-info
+  '((t (:inherit font-lock-doc-face)))
+  "Face for miscellaneous info, tags, etc.")
+
 (provide 'deterred-faces)
 ;;; deterred-faces.el ends here

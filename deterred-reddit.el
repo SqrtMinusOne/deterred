@@ -137,12 +137,14 @@ Run CALLBACK when done."
   (let* ((db (or db (deterred-db--init)))
          (posts (deterred-db-select-alist
                  db "SELECT * FROM reddit_post
-                     WHERE timestamp BETWEEN ? AND ?"
+                     WHERE timestamp BETWEEN ? AND ?
+                     ORDER BY timestamp ASC"
                  (list timestamp (+ (* 60 60 24) timestamp))))
          (comments
           (deterred-db-select-alist
            db "SELECT * FROM reddit_comment
-                     WHERE timestamp BETWEEN ? AND ?"
+               WHERE timestamp BETWEEN ? AND ?
+               ORDER BY timestamp ASC"
            (list timestamp (+ (* 60 60 24) timestamp))))
          (comment-subreddits
           (seq-uniq
@@ -152,7 +154,7 @@ Run CALLBACK when done."
       `((:short-description
          . ,(deterred-format
              (when posts
-               (f (f-num (seq-length posts)) " posts"))
+               (f (f-num (seq-length posts)) " posts" (when comments "; ")))
              (when comments
                (when posts
                  " and ")

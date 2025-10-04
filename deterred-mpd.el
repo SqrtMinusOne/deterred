@@ -272,14 +272,14 @@ end timestamp."
       `((:short-description
          . ,(deterred-format
              (deterred-utils-duration-from-minutes (/ time-total 60.0))
-             ": "
+             " total: "
              (f (f-acc "time-by-artist[0]->'album_artist")
                 " (" (deterred-utils-duration-from-minutes
                       (/ (f-acc "time-by-artist[0]->'duration") 60.0)) ")"
                 (when (> (seq-length time-by-artist) 1)
                   (f ", " (f-acc "time-by-artist[1]->'album_artist")
                      " (" (deterred-utils-duration-from-minutes
-                           (/ (f-acc "time-by-artist[0]->'duration") 60.0)) ")"))
+                           (/ (f-acc "time-by-artist[1]->'duration") 60.0)) ")"))
                 (when (> (seq-length time-by-artist) 2)
                   (f " and " (f-num (- (seq-length time-by-artist) 2)) " others")))))
         (:long-description
