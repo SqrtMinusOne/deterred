@@ -38,7 +38,8 @@
 (cl-defmethod deterred-dashboard-default-params ((_dashboard deterred-dashboard-dummy))
   '((:a-range . 10)
     (:a-count . 100)
-    (:b-range . 10)))
+    (:b-range . 10)
+    (:a-date . 1760114739)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-dummy))
   (deterred-dashboard-widget-number
@@ -52,6 +53,11 @@
   (deterred-dashboard-widget-number
    :name "B range"
    :key :b-range)
+  (insert "\n")
+  (deterred-dashboard-widget-date
+   :name "A date"
+   :key :a-date
+   :display-date t)
   (insert "\n\n"))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-dummy)

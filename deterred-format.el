@@ -146,7 +146,7 @@ E.g. a->b.c[0]."
                (eq item-car 'f-img-data))
            `(let ((img (create-image ,(deterred-format--process-expr-item
                                        (nth 1 item))
-                                     nil (eq item-car 'f-img-data)
+                                     nil ,(eq item-car 'f-img-data)
                                      ,@(cddr item))))
               (apply
                #'propertize

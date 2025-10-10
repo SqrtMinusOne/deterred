@@ -1,4 +1,4 @@
-;;; deterred-dashboard.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-dashboard.el --- Dashboard functionality for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -244,6 +244,49 @@ DASHBOARD is a dashboard object."
                  (alist-get ,key deterred-dashboard-params)
                  (if (string-empty-p var) nil
                    (string-to-number var)))))))
+
+(defun deterred-dashboard--update-date-overlay (widget timestamp)
+  "Update the date overlay for WIDGET with TIMESTAMP."
+  (let ((ov (widget-get widget 'date-overlay)))
+    (unless ov
+      (setq ov (make-overlay (point) (point)))
+      (widget-put widget 'date-overlay ov))
+    (overlay-put
+     ov 'after-string
+     (deterred-format
+      "=> "
+      (f-ace (if timestamp
+                 (format-time-string deterred-dispatcher-date-format timestamp)
+               "(no date)")
+             'deterred-faces-date)))))
+
+(cl-defmacro deterred-dashboard-widget-date
+    (&key name key (size 20) kind display-date)
+  (unless name
+    (error "The `name' argument is required"))
+  (unless key
+    (error "The `key' argument is required"))
+  `(let ((widget
+          (widget-create
+           'editable-field
+           :size  ,size
+           :format (deterred-format (f-ace (f ,name ": ") 'widget-button)
+                                    "%v   ")
+           :value (let ((val (alist-get ,key deterred-dashboard-params)))
+                    (when (numberp val)
+                      (format-time-string "%Y-%m-%d" val)))
+           :notify (lambda (widget &rest _)
+                     (let* ((var (widget-value widget))
+                            (timestamp (deterred-utils-read-date var ,kind)))
+                       (setf
+                        (alist-get ,key deterred-dashboard-params)
+                        timestamp)
+                       ,@(when display-date
+                           `((deterred-dashboard--update-date-overlay
+                              widget timestamp))))))))
+     ,@(when display-date
+         `((deterred-dashboard--update-date-overlay
+            widget (alist-get ,key deterred-dashboard-params))))))
 
 (defun deterred-dashboard-print-error (desc err output)
   (insert
