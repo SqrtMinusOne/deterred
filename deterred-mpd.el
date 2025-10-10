@@ -29,6 +29,7 @@
 (require 'deterred-db)
 (require 'pcsv)
 (require 'libmpdel)
+(require 'org-duration)
 
 (defconst deterred-mpd-uuid-namespace
   "c66d74fc-c243-4d8e-9e0a-72a88b78132b")
@@ -271,14 +272,14 @@ end timestamp."
     (when data
       `((:short-description
          . ,(deterred-format
-             (deterred-utils-duration-from-minutes (/ time-total 60.0))
+             (org-duration-from-minutes (/ time-total 60.0))
              " total: "
              (f (f-acc "time-by-artist[0]->'album_artist")
-                " (" (deterred-utils-duration-from-minutes
+                " (" (org-duration-from-minutes
                       (/ (f-acc "time-by-artist[0]->'duration") 60.0)) ")"
                 (when (> (seq-length time-by-artist) 1)
                   (f ", " (f-acc "time-by-artist[1]->'album_artist")
-                     " (" (deterred-utils-duration-from-minutes
+                     " (" (org-duration-from-minutes
                            (/ (f-acc "time-by-artist[1]->'duration") 60.0)) ")"))
                 (when (> (seq-length time-by-artist) 2)
                   (f " and " (f-num (- (seq-length time-by-artist) 2)) " others")))))
@@ -287,7 +288,7 @@ end timestamp."
              "Albums listened:\n"
              (f-mapconcat
               (f "- " (f-acc "iter->'album") " ("
-                 (deterred-utils-duration-from-minutes
+                 (org-duration-from-minutes
                   (/ (f-acc "iter->'duration") 60.0))
                  ")")
               time-by-album)))))))

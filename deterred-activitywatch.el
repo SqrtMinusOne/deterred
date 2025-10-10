@@ -31,6 +31,7 @@
 (require 'deterred-source)
 (require 'deterred-format)
 (require 'request)
+(require 'org-duration)
 (require 'cl-lib)
 
 (defconst deterred-activitywatch-uuid-namespace
@@ -438,18 +439,18 @@ DB is the sqlite database object."
     (when (> total-minutes 0)
       `((:short-description
          . ,(format "%s hours"
-                    (deterred-utils-duration-from-minutes total-minutes)))
+                    (org-duration-from-minutes total-minutes)))
         (:long-description
          . ,(deterred-format
              "Hostnames: "
              (f-mapconcat
-              (f (deterred-utils-duration-from-minutes (alist-get 'total iter))
+              (f (org-duration-from-minutes (alist-get 'total iter))
                  " on " (f-acc "iter->'hostname"))
               hostname-data "; ")
              "\n"
              "Top " (f-num deterred-activitywatch-show-top-in-summary) " apps:\n"
              (f-mapconcat
-              (f "- " (deterred-utils-duration-from-minutes (alist-get 'total iter))
+              (f "- " (org-duration-from-minutes (alist-get 'total iter))
                  " on " (f-acc "iter->'app"))
               app-data)))))))
 

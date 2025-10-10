@@ -30,6 +30,7 @@
 (require 'deterred-source)
 (require 'deterred-utils)
 (require 'cl-lib)
+(require 'org-duration)
 
 (defconst deterred-wakatime-key-mappings
   '((branches total_seconds name)
@@ -313,14 +314,14 @@ DB is the sqlite database object."
                                      0)))
     (when (> total-minutes 0)
       (let ((first-project-duration
-             (deterred-utils-duration-from-minutes
+             (org-duration-from-minutes
               (alist-get 'total (car total-data))))
             (other-projects-duration
-             (deterred-utils-duration-from-minutes
+             (org-duration-from-minutes
               (- total-minutes
                  (alist-get 'total (car total-data)))))
             (all-projects-duration
-             (deterred-utils-duration-from-minutes total-minutes)))
+             (org-duration-from-minutes total-minutes)))
         `((:short-description
            . ,(deterred-format
                (when (> first-project-percentile 0.5)
@@ -335,7 +336,7 @@ DB is the sqlite database object."
            . ,(deterred-format
                "Projects: \n"
                (f-mapconcat
-                (f "- " (deterred-utils-duration-from-minutes (alist-get 'total iter))
+                (f "- " (org-duration-from-minutes (alist-get 'total iter))
                    " in " (f-acc "iter->'name"))
                 total-data
                 "\n"))))))))
