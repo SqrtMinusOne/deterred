@@ -34,6 +34,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-utils)
 
 (defcustom deterred-backups-location "~/.deterred/backups/"
   "The path to where the backups are stored.  Change this."
@@ -43,7 +44,7 @@
 (defcustom deterred-backup-keep
   '((daily . 5)
     (weekly . 4)
-    (monthly . 4))
+    (monthly . 8))
   "How long to keep daily, weekly, months."
   :group 'deterred
   :type '(list
@@ -191,6 +192,12 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
   (deterred-backup--last
    deterred-db-location
    deterred-backups-location))
+
+(defun deterred-backups-need-p ()
+  "Return t if a fresh backup is required."
+  (let ((start-of-day (deterred-utils-ts-to-day-start))
+        (backups-last (deterred-backups-last)))
+    (> backups-last start-of-day)))
 
 (provide 'deterred-backup)
 ;;; deterred-backup.el ends here
