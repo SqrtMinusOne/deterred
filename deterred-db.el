@@ -288,5 +288,69 @@ If RETURN-TYPE is string, return strings.  Otherwise return symbols."
                               for datum in row
                               collect (cons field datum)))))
 
+(defun deterred-db--select-process-template (query &optional values)
+  "Prepare VALUES for interpolation in QUERY."
+  (let (stored-values)
+    (with-temp-buffer
+      (insert query)
+      (goto-char (point-min))
+      (save-match-data
+        (while (re-search-forward (rx (| (: ":" (+ alnum))
+                                         "[["))
+                                  nil t)
+          (if (string-match-p (rx bos ":") (match-string 0))
+              (let ((key (intern (match-string 0))))
+                (push (alist-get key values) stored-values)
+                (delete-region (- (point) (length (match-string 0))) (point))
+                (insert "?"))
+            (let ((brackets-start (point)))
+              (unless (re-search-forward (rx "]]") nil t)
+                (error "Couldn't find the pair ]] for [["))
+              (let ((brackets-end (point)))
+                (goto-char brackets-start)
+                (unless (re-search-forward (rx ":" (+ alnum)) nil t)
+                  (error "Couldn't find the interpolation symbol in brackets"))
+                (let ((key (intern (match-string 0))))
+                  (if (alist-get key values)
+                      (progn
+                        (push (alist-get key values) stored-values)
+                        (save-excursion
+                          (goto-char brackets-end)
+                          (delete-region (point) (- (point) 2)))
+                        (delete-region (- (point) (length (match-string 0))) (point))
+                        (insert "?")
+                        ;; This should keep the point on "?", I think
+                        (save-excursion
+                          (goto-char brackets-start)
+                          (delete-region (point) (- (point) 2))))
+                    (delete-region (- brackets-start 2)
+                                   brackets-end))))))))
+      (cons (buffer-string) (nreverse stored-values)))))
+
+(defun deterred-db-select-template (db query &optional values return-type)
+  "Perform sqlite select with templating.
+
+VALUES is an list with query parameters, where the keys are symbols
+starting with \":\".  They are safely interpolated in QUERY,
+i.e. every instance of a key is replaced with its value from the
+VALUES parameter using the standard ?-syntax.
+
+If a key in QUERY is enclosed in [[ ... ]], interpolate the key if the
+value is non-nil and delete the expression in the brackets otherwise.
+
+See `sqlite-select' on DB and RETURN-TYPE."
+
+  (pcase-let ((`(,query . ,values) (deterred-db--select-process-template query values)))
+    (sqlite-select db query values return-type)))
+
+(defun deterred-db-select-template-alist (db query &optional values return-type)
+  "Like `deterred-db-select-template', but return alists.
+
+See `deterred-db-select-template' on DB, QUERY and VALUES, and
+`deterred-db-select-alist' on RETURN-TYPE."
+
+  (pcase-let ((`(,query . ,values) (deterred-db--select-process-template query values)))
+    (deterred-db-select-alist db query values return-type)))
+
 (provide 'deterred-db)
 ;;; deterred-db.el ends here
