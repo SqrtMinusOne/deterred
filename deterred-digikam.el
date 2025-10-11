@@ -199,14 +199,20 @@ Emacs down quite a bit."
       (goto-char (button-start button))
       (delete-region (button-start button) (button-end button))
       (insert
+       ;; Somehow `magit-section-hide' doesn't work when the section
+       ;; starts with images.
+       " "
        (deterred-format
-        (f-mapconcat
-         (f-img (deterred-digikam-make-thumbnail
-                 (f-acc "iter->'id")
-                 (f-acc "iter->'path"))
-                :max-height deterred-digikam-thumbnail-size
-                :actual-path (alist-get 'path iter))
-         photos "")))
+        (propertize
+         (f-mapconcat
+          (f-img (deterred-digikam-make-thumbnail
+                  (f-acc "iter->'id")
+                  (f-acc "iter->'path"))
+                 :max-height deterred-digikam-thumbnail-size
+                 :actual-path (alist-get 'path iter))
+          photos "")
+         'magit-section section)))
+      (oset section content content-start)
       (let ((next-button (next-button (point))))
         (when (string= "(Show all)" (button-label next-button))
           (let ((inhibit-read-only t))
