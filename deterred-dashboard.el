@@ -23,7 +23,12 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Dashboard functionality for DETERRED.
+;;
+;; See `deterred-dashboard' on creating a custom dashboard.  All
+;; created dashboards must be registered in `deterred-dashboards'.
+;;
+;; Invoke a dashboard with `deterred-dashboard-open'.
 
 ;;; Code:
 (require 'eieio)
@@ -54,40 +59,110 @@ etc."
                    (cons :tag "Name" (const name) string)
                    (cons :tag "Tags" (const tags) (repeat symbol)))))))
 
-(defvar-local deterred-dashboard-params nil)
-(defvar-local deterred-dashboard-current nil)
-(defvar-local deterred-dashboard-data nil)
+(defvar-local deterred-dashboard-params nil
+  "Current parameters for the dashboard.")
+(defvar-local deterred-dashboard-current nil
+  "The active `deterred-dashboard' instance.")
+(defvar-local deterred-dashboard-data nil
+  "Current data for the dashboard.")
 
 (defclass deterred-dashboard ()
   ((name :initarg name :type string))
-  "Abstract superclass for DETERRED dashboards."
+  "Abstract superclass for DETERRED dashboards.
+
+The name parameter in the class is required.
+
+The dashboard works as follows.  First, it requires parameters,
+e.g. the date range.  `deterred-dashboard-default-params' returns the
+default values of the parameters; `deterred-dashboard-render-params'
+renders controls that update parameters.  The current value of the
+parameters in stored in `deterred-dashboard-params'.
+
+Then, datasets are retrieved using the parameters.
+`deterred-dashboard-list-datasets' lists datasets returned by the
+dashboard; `deterred-dashboard-fetch-datasets' actually retrives them.
+The current values of the datasets is stored in
+`deterred-dashboard-data'.
+
+Then, `deterred-dashboard-render-results' is used to render the
+datasets.
+
+See the docs on the mentioned generics for more detail.
+
+There are also some helpers to render parameters:
+- `deterred-dashboard-widget-number' - a widget to edit a number.
+- `deterred-dashboard-widget-date' - a widget to edit a date.
+- `deterred-dashboard-widget-checkbox' - a boolean widget.
+All the widgets update the required value in
+`deterred-dashboard-params' in the `:notify' function.
+
+And helpers to render results:
+- `deterred-dashboard-exec-python'
+- `deterred-dashboard-print-images-base64'.
+
+See also `deterred-dashboard-dummy' for an example dashboard."
   :abstract t)
 
 (cl-defgeneric deterred-dashboard-list-datasets (dashboard)
-  "List databasets returned by DASHBOARD.")
+  "List datasets returned by DASHBOARD.
+
+Return an alist with the datasets' metadata.  The keys are symbols
+that serve as dataset names, and the values are alists with the
+following keys:
+- `name' - human-readable name
+- `tags' - a list of symbols with dataset tags.")
 
 (cl-defgeneric deterred-dashboard-fetch-datasets (dashboard params)
   "Fetch datasets (with contents) from DASHBOARD.
 
-PARAMS is an alist of parameters.")
+PARAMS is an alist of parameters.
+
+Return an alist, where the keys are dataset names (as returned by
+`deterred-dashboard-list-datasets'), and the values are the contents,
+which have to be lists of alists to work correctly.")
 
 (cl-defgeneric deterred-dashboard-default-params (dashboard)
-  "Return default parameters for DASHBOARD.")
+  "Return default parameters for DASHBOARD.
+
+Return an alist, where the keys are parameter names.")
 
 (cl-defmethod deterred-dashboard-default-params ((_ deterred-dashboard))
+  "Return nil, meaning that this dashboard has no parameters."
   nil)
 
-(cl-defgeneric deterred-dashboard-render-params (dashboard))
+(cl-defgeneric deterred-dashboard-render-params (dashboard)
+  "Render the parameter section for DASHBOARD.
+
+The proposed implementation is to use `widget-create' and update
+`deterred-dashboard-params' in the `:notify' method.
+
+There are some helper macros:
+- `deterred-dashboard-widget-number'
+- `deterred-dashboard-widget-date'
+- `deterred-dashboard-widget-checkbox'")
 
 (cl-defmethod deterred-dashboard-render-params ((_ deterred-dashboard))
+  "Do not render the parameter section for dashboard."
   nil)
 
-(cl-defgeneric deterred-dashboard-render-results (dashboard data))
+(cl-defgeneric deterred-dashboard-render-results (dashboard params data)
+  "Render results for DASHBOARD.
 
-(cl-defmethod deterred-dashboard-render-results ((_ deterred-dashboard) data)
+PARAMS are the parameters, DATA is an alist as returned by
+`deterred-dashboard-list-datasets', with data added as the `data'
+key.")
+
+(cl-defmethod deterred-dashboard-render-results ((_ deterred-dashboard) _data)
+  "Do not render the results section for dashboard."
   nil)
 
 (defun deterred-dashboard--data (dashboard params)
+  "Collect data for DASHBOARD, according to PARAMS.
+
+Return an alist as returned by `deterred-dashboard-list-datasets', but
+with data added to the datasets in the `data' key.
+
+Data has be a list of alists to work correctly."
   (let ((schema (deterred-utils-validate
                  (deterred-dashboard-list-datasets dashboard)
                  deterred-dashboard--datasets-schema
@@ -122,6 +197,7 @@ PARAMS is an alist of parameters.")
   (outline-minor-mode 1))
 
 (defun deterred-dashboard--render-actions ()
+  "Render the actions section for the dashboard interface."
   (insert (deterred-format (f-h1 "Actions") "\n"))
   (widget-create 'push-button
                  :notify (lambda (&rest _)
@@ -130,6 +206,10 @@ PARAMS is an alist of parameters.")
   (insert "\n\n"))
 
 (defun deterred-dashboard--render-datasets (name data)
+  "Render the datasets section for the dashboard interface.
+
+NAME is the dashboard name, DATA is the output of
+`deterred-dashboard--data'."
   (insert
    (deterred-format
     (f-h1 "Datasets") "\n"
@@ -159,13 +239,18 @@ PARAMS is an alist of parameters.")
      data))
    "\n\n"))
 
-(defun deterred-dashboard--render-results (dashboard data)
+(defun deterred-dashboard--render-results (dashboard params data)
+  "Render the results sections for DASHBOARD.
+
+PARAMS is the parameters, DATA is data as returned by
+`deterred-dashboard--data'."
   (insert
    (deterred-format
     (f-h1 "Results") "\n"))
-  (deterred-dashboard-render-results dashboard data))
+  (deterred-dashboard-render-results dashboard params data))
 
 (defun deterred-dashboard-refresh ()
+  "Refresh the dashboard interface."
   (interactive)
   (let ((data (deterred-dashboard--data deterred-dashboard-current
                                         deterred-dashboard-params))
@@ -179,14 +264,18 @@ PARAMS is an alist of parameters.")
       (delete-region (point) (point-max))
       (deterred-dashboard--render-datasets name data)
       (deterred-dashboard--render-results
-       deterred-dashboard-current data))))
+       deterred-dashboard-current
+       deterred-dashboard-params data))))
 
 (defun deterred-dashboard-maybe-init ()
+  "Initialize `deterred-dashboards' with default dashboards if nil."
   (unless deterred-dashboards
     (require 'deterred-dashboard-dummy)
+    (require 'deterred-dashboard-mpd)
 
     (setq deterred-dashboards
-          (list (deterred-dashboard-dummy)))))
+          (list (deterred-dashboard-dummy)
+                (deterred-dashboard-mpd)))))
 
 (defun deterred-dashboard-open (dashboard)
   "Open a DETERRED dashboard.
@@ -217,7 +306,7 @@ DASHBOARD is a dashboard object."
       (when params
         (insert
          (deterred-format
-          (f-h1 "* Parameters") "\n"))
+          (f-h1 "Parameters") "\n"))
         (deterred-dashboard-render-params dashboard))
       (deterred-dashboard--render-actions)
       (deterred-dashboard-refresh)
@@ -226,6 +315,12 @@ DASHBOARD is a dashboard object."
     (switch-to-buffer-other-window buffer)))
 
 (cl-defmacro deterred-dashboard-widget-number (&key name key (size 20))
+  "A widget to edit a number.
+
+NAME is the displayed name, KEY is the key in
+`deterred-dashboard-params'.  The stored value is a number or nil.
+
+SIZE is the size of field."
   (unless name
     (error "The `name' argument is required"))
   (unless key
@@ -262,6 +357,18 @@ DASHBOARD is a dashboard object."
 
 (cl-defmacro deterred-dashboard-widget-date
     (&key name key (size 20) kind display-date)
+  "A widget to edit a date like `org-read-date'.
+
+NAME is the displayed name, KEY is the key in
+`deterred-dashboard-params'.  The stored value is either a UNIX
+timestamp or nil.
+
+SIZE is the size of the field.  If KIND is \"from\", ensure that the
+timestamp is the start of the day; if it's \"to\", ensure it's the end
+of the day.
+
+If DISPLAY-DATE is non-nil, display the resulting date near the widget
+using an overlay, like `org-read-date'."
   (unless name
     (error "The `name' argument is required"))
   (unless key
@@ -273,8 +380,9 @@ DASHBOARD is a dashboard object."
            :format (deterred-format (f-ace (f ,name ": ") 'widget-button)
                                     "%v   ")
            :value (let ((val (alist-get ,key deterred-dashboard-params)))
-                    (when (numberp val)
-                      (format-time-string "%Y-%m-%d" val)))
+                    (if (numberp val)
+                        (format-time-string "%Y-%m-%d" val)
+                      ""))
            :notify (lambda (widget &rest _)
                      (let* ((var (widget-value widget))
                             (timestamp (deterred-utils-read-date var ,kind)))
@@ -288,7 +396,33 @@ DASHBOARD is a dashboard object."
          `((deterred-dashboard--update-date-overlay
             widget (alist-get ,key deterred-dashboard-params))))))
 
-(defun deterred-dashboard-print-error (desc err output)
+(cl-defmacro deterred-dashboard-widget-checkbox
+    (&key name key)
+  "A widget to edit a boolean value.
+
+NAME is the displayed name, KEY is the key in
+`deterred-dashboard-params'.  The stored value is either t or nil."
+  (unless name
+    (error "The `name' argument is required"))
+  (unless key
+    (error "The `key' argument is required"))
+  `(progn
+     (insert (propertize ,name 'face 'widget-button) ": ")
+     (widget-create
+      'checkbox
+      :value (let ((val (alist-get ,key deterred-dashboard-params)))
+               val)
+      :notify (lambda (widget &rest _)
+                (let* ((var (widget-value widget)))
+                  (setf
+                   (alist-get ,key deterred-dashboard-params)
+                   var))))))
+
+(defun deterred-dashboard--print-error (desc err output)
+  "Format an error for dashboard.
+
+DESC is the error description, ERR is the error object, OUTPUT is the
+output string."
   (insert
    (deterred-format
     (f-ace desc 'error) "\n"
@@ -297,6 +431,11 @@ DASHBOARD is a dashboard object."
     "\n\n")))
 
 (defun deterred-dashboard-print-images-base64 (images &rest props)
+  "Print IMAGES given as base64 strings.
+
+IMAGES is either one base64-encoded image string or a sequence of them.
+
+PROPS are forwarded to `create-image'."
   (unless (sequencep images)
     (setq images (list images)))
   (insert
@@ -317,8 +456,22 @@ DASHBOARD is a dashboard object."
 
 (cl-defun deterred-dashboard-exec-python
     (&key python-code python-file
-          input (on-error #'deterred-dashboard-print-error)
+          input (on-error #'deterred-dashboard--print-error)
           on-success)
+  "Execute Python code in a dashboard.
+
+PYTHON-CODE is a string of Python code, PYTHON-FILE is a file with
+Python code.  Either one of these parameters is required, but not
+both.
+
+INPUT is json-encoded and given to the interpreter, e.g. to be read by
+json.loads(input()).
+
+ON-ERROR is invoked when something goes wrong, the default value is
+`deterred-dashboard--print-error'.
+
+ON-SUCCESS is invoked on the process completion, with json-decoded
+stdout of the process as the sole argument."
   (unless (or python-code python-file)
     (error "Set either `python-code' or `python-file'"))
   (let ((args
