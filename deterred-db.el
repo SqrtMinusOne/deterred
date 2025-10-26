@@ -288,6 +288,30 @@ If RETURN-TYPE is string, return strings.  Otherwise return symbols."
                               for datum in row
                               collect (cons field datum)))))
 
+(defun deterred-db--select-process-template-value (value stored-values)
+  "Process VALUE for interpolation in query.
+
+If VALUE is not a list, push it to STORED-VALUES and insert the \"?\"
+symbol.  Otherwise, expand it to (?, ?, ?), where the number of
+\"?\"-s corresponds to the length of VALUE, and push each item in the
+list to STORED-VALUES.
+
+Note that STORED-VALUES would have to be reversed after usage."
+  (if (not (and (listp value) (> (seq-length value) 0)))
+      (progn
+        (push value stored-values)
+        (insert "?"))
+    (insert "(")
+    (cl-loop with last = (1- (seq-length value))
+             for val in value
+             for i from 0
+             do (insert "?")
+             do (push val stored-values)
+             unless (= i last)
+             do (insert ","))
+    (insert ")"))
+  stored-values)
+
 (defun deterred-db--select-process-template (query &optional values)
   "Prepare VALUES for interpolation in QUERY."
   (let (stored-values)
@@ -295,31 +319,34 @@ If RETURN-TYPE is string, return strings.  Otherwise return symbols."
       (insert query)
       (goto-char (point-min))
       (save-match-data
-        (while (re-search-forward (rx (| (: ":" (+ alnum))
+        (while (re-search-forward (rx (| (: ":" (+ (| alnum "-" "_")))
                                          "[["))
                                   nil t)
           (if (string-match-p (rx bos ":") (match-string 0))
               (let ((key (intern (match-string 0))))
-                (push (alist-get key values) stored-values)
                 (delete-region (- (point) (length (match-string 0))) (point))
-                (insert "?"))
+                (setq stored-values
+                      (deterred-db--select-process-template-value
+                       (alist-get key values) stored-values)))
             (let ((brackets-start (point)))
               (unless (re-search-forward (rx "]]") nil t)
                 (error "Couldn't find the pair ]] for [["))
               (let ((brackets-end (point)))
                 (goto-char brackets-start)
-                (unless (re-search-forward (rx ":" (+ alnum)) nil t)
+                (unless (re-search-forward (rx ":" (+ (| alnum "-" "_"))) nil t)
                   (error "Couldn't find the interpolation symbol in brackets"))
-                (let ((key (intern (match-string 0))))
+                (let* ((key (intern (match-string 0)))
+                       (value (alist-get key values)))
                   (if (alist-get key values)
                       (progn
-                        (push (alist-get key values) stored-values)
                         (save-excursion
                           (goto-char brackets-end)
                           (delete-region (point) (- (point) 2)))
                         (delete-region (- (point) (length (match-string 0))) (point))
-                        (insert "?")
                         ;; This should keep the point on "?", I think
+                        (setq stored-values
+                              (deterred-db--select-process-template-value
+                               (alist-get key values) stored-values))
                         (save-excursion
                           (goto-char brackets-start)
                           (delete-region (point) (- (point) 2))))
@@ -330,10 +357,12 @@ If RETURN-TYPE is string, return strings.  Otherwise return symbols."
 (defun deterred-db-select-template (db query &optional values return-type)
   "Perform sqlite select with templating.
 
-VALUES is an list with query parameters, where the keys are symbols
+VALUES is an alist with query parameters, where the keys are symbols
 starting with \":\".  They are safely interpolated in QUERY,
 i.e. every instance of a key is replaced with its value from the
 VALUES parameter using the standard ?-syntax.
+
+If a value is a list, it is expanded as (?, ?, ...?).
 
 If a key in QUERY is enclosed in [[ ... ]], interpolate the key if the
 value is non-nil and delete the expression in the brackets otherwise.
