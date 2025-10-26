@@ -26,12 +26,15 @@
 ;; TODO
 
 ;;; Code:
+(require 'widget)
+(require 'transient)
+(require 'magit-section)
+
 (require 'deterred-db)
+(require 'deterred-dashboard)
 (require 'deterred-faces)
 (require 'deterred-source)
 (require 'deterred-utils)
-(require 'transient)
-(require 'magit-section)
 
 (defconst deterred-dispatcher-buffer-name "*DETERRED*"
   "Default buffer name for org-journal-tags status.")
@@ -88,7 +91,7 @@ No idea what I'm doing wrong, but this seems to help."
               (interactive)
               (quit-window t))))
     map)
-  "A keymap for `org-journal-tags-status-mode'.")
+  "A keymap for `deterred-dispatcher-mode'.")
 
 (define-derived-mode deterred-dispatcher-mode magit-section "DETERRED"
   :group 'deterred
@@ -261,6 +264,17 @@ No idea what I'm doing wrong, but this seems to help."
        for (timestamp . datum) in data
        do (deterred-dispatcher--render-timestamp timestamp datum)))))
 
+(defun deterred-dispatcher--render-actions ()
+  (widget-create 'push-button
+                 :notify (lambda (&rest _)
+                           (call-interactively #'deterred-dashboard-open))
+                 "[Dashboards...]")
+  (insert " ")
+  (widget-create 'push-button
+                 :notify (lambda (&rest _)
+                           (deterred-backup))
+                 "[Backup]"))
+
 (defun deterred-dispatcher--render-contents ()
   "Render DETERRED dispatcher."
   (let ((inhibit-read-only t))
@@ -275,7 +289,11 @@ No idea what I'm doing wrong, but this seems to help."
                         (propertize (format-time-string deterred-dispatcher-date-format)
                                     'face 'deterred-faces-date)))
         (magit-insert-heading)
-        (insert "HELLO\nCampsite Gaia"))
+        (insert (deterred-format
+                 "Hostname:      "
+                 (system-name) "\n")))
+      (insert "\n")
+      (deterred-dispatcher--render-actions)
       (insert "\n\n")
       (deterred-dispatcher--render-sources)
       (insert "\n\n")
