@@ -70,6 +70,10 @@ DATA is a list of alists, VTABLE-ARGS is passed to `make-vtable'."
                vtable-args)))
     (switch-to-buffer-other-window buffer)))
 
+(defun deterred-grid--org-table-escape (string)
+  "Escape STRING for use in `org-mode' tables."
+  (string-replace "|" "¦" string))
+
 (cl-defun deterred-grid-print-with-org (data &key grid-button column-names max-rows
                                              max-column-width)
   "Display DATA with an `org-mode' table.
@@ -101,14 +105,21 @@ MAX-COLUMN-WIDTH is passed, truncate the column names with
       (insert "|--\n")
       (mapc (lambda (datum)
               (insert "| "
-                      (mapconcat (lambda (col)
-                                   (let ((item (alist-get col datum)))
-                                     (cond
-                                      ((numberp item) (number-to-string item))
-                                      ((stringp item) item)
-                                      (t (prin1-to-string item)))))
-                                 columns
-                                 " | ")
+                      (mapconcat
+                       (lambda (col)
+                         (let* ((item (alist-get col datum))
+                                (value (deterred-grid--org-table-escape
+                                        (cond
+                                         ((numberp item) (number-to-string item))
+                                         ((stringp item) item)
+                                         (t (prin1-to-string item))))))
+                           (when max-column-width
+                             (setq value
+                                   (truncate-string-to-width value max-column-width
+                                                             nil nil t)))
+                           value))
+                       columns
+                       " | ")
                       " |\n"))
             (if max-rows (take max-rows data) data))
       (goto-char (point-min))
