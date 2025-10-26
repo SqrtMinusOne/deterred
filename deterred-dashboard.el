@@ -34,6 +34,7 @@
 (require 'eieio)
 (require 'outline)
 (require 'validate)
+(require 'crm)
 (require 'deterred-format)
 (require 'deterred-grid)
 
@@ -152,7 +153,7 @@ PARAMS are the parameters, DATA is an alist as returned by
 `deterred-dashboard-list-datasets', with data added as the `data'
 key.")
 
-(cl-defmethod deterred-dashboard-render-results ((_ deterred-dashboard) _data)
+(cl-defmethod deterred-dashboard-render-results ((_ deterred-dashboard) _params _data)
   "Do not render the results section for dashboard."
   nil)
 
@@ -307,12 +308,22 @@ DASHBOARD is a dashboard object."
         (insert
          (deterred-format
           (f-h1 "Parameters") "\n"))
-        (deterred-dashboard-render-params dashboard))
+        (deterred-dashboard-render-params dashboard)
+        (insert "\n"))
       (deterred-dashboard--render-actions)
       (deterred-dashboard-refresh)
       (widget-setup)
       (goto-char (point-min)))
     (switch-to-buffer-other-window buffer)))
+
+(defmacro deterred-dashboard--require-arguments (&rest symbols)
+  "Throw error if any of the SYMBOLS are valued nil."
+  `(progn
+     ,@(mapcar
+        (lambda (s)
+          `(unless ,s
+             (error ,(format "The `%s' argument is required" (symbol-name s)))))
+        symbols)))
 
 (cl-defmacro deterred-dashboard-widget-number (&key name key (size 20))
   "A widget to edit a number.
@@ -321,10 +332,7 @@ NAME is the displayed name, KEY is the key in
 `deterred-dashboard-params'.  The stored value is a number or nil.
 
 SIZE is the size of field."
-  (unless name
-    (error "The `name' argument is required"))
-  (unless key
-    (error "The `key' argument is required"))
+  (deterred-dashboard--require-arguments name key)
   `(widget-create
     'editable-field
     :size ,size
@@ -369,10 +377,7 @@ of the day.
 
 If DISPLAY-DATE is non-nil, display the resulting date near the widget
 using an overlay, like `org-read-date'."
-  (unless name
-    (error "The `name' argument is required"))
-  (unless key
-    (error "The `key' argument is required"))
+  (deterred-dashboard--require-arguments name key)
   `(let ((widget
           (widget-create
            'editable-field
@@ -402,10 +407,7 @@ using an overlay, like `org-read-date'."
 
 NAME is the displayed name, KEY is the key in
 `deterred-dashboard-params'.  The stored value is either t or nil."
-  (unless name
-    (error "The `name' argument is required"))
-  (unless key
-    (error "The `key' argument is required"))
+  (deterred-dashboard--require-arguments name key)
   `(progn
      (insert (propertize ,name 'face 'widget-button) ": ")
      (widget-create
@@ -417,6 +419,120 @@ NAME is the displayed name, KEY is the key in
                   (setf
                    (alist-get ,key deterred-dashboard-params)
                    var))))))
+
+(defun deterred-dashboard--process-completing-read (selected options)
+  "Find SELECTED in OPTIONS.
+
+If SELECTED is nil or an empty string, return nil.
+
+If SELECTED is a non-empty list, call this on each item in SELECTED.
+
+If OPTIONS is a list of symbols, and SELECTED is a string, `intern'
+it, otherwise return it as-is.
+
+If OPTIONS is a list of strings, return SELECTED as-is.
+
+If OPTIONS is an alist, return the value corresponding to SELECTED."
+  (cond
+   ((and (listp selected) (> (seq-length selected) 0))
+    (mapcar (lambda (item)
+              (deterred-dashboard--process-completing-read
+               item options))
+            selected))
+   ((or (string-empty-p selected) (null selected)) nil)
+   ((symbolp (car options)) (if (stringp selected)
+                                (intern selected)
+                              selected))
+   ((stringp (car options)) selected)
+   ((and (consp options)
+         (symbolp (caar options)))
+    (alist-get selected options))
+   ((and (consp options)
+         (stringp (caar options)))
+    (alist-get selected options nil nil #'equal))))
+
+(defun deterred-dashboard--widget-render-option (widget value)
+  "Render VALUE after WIDGET."
+  (save-excursion
+    (goto-char (widget-get widget :to))
+    (let ((ov (widget-get widget 'value-overlay))
+          (option-start (point))
+          (inhibit-read-only t))
+      (when ov
+        (delete-region (overlay-start ov)
+                       (overlay-end ov)))
+      (insert
+       ": " (cond
+             ((null value) (propertize "(nil)" 'face 'deterred-faces-info))
+             ((listp value) (deterred-format
+                             (f-ace "(" 'deterred-faces-info)
+                             (f-mapconcat iter value "; ")
+                             (f-ace ")" 'deterred-faces-info)))
+             ((stringp value) value)))
+      (if ov
+          (move-overlay ov option-start (point))
+        (setq ov (make-overlay option-start (point)))
+        (widget-put widget 'value-overlay ov)))))
+
+(cl-defmacro deterred-dashboard-widget-completing-read
+    (&key name key options (prompt "Select: "))
+  "A widget to select a value from OPTIONS with `completing-read'.
+
+NAME is the displayed name, KEY is the key in
+`deterred-dashboard-params'.  OPTIONS can be a list of symbols, a list
+of strings, or an alist with symbols or strings as keys.
+
+PROMPT is passed to `completing-read'."
+  (deterred-dashboard--require-arguments name key options)
+  `(progn
+     (let* ((widget-push-button-prefix "")
+            (widget-push-button-suffix "")
+            (widget
+             (widget-create
+              'push-button
+              :notify
+              (lambda (widget &rest _)
+                (let* ((selected (completing-read ,prompt ,options))
+                       (value (deterred-dashboard--process-completing-read
+                               selected ,options)))
+                  (deterred-dashboard--widget-render-option widget value)
+                  (setf (alist-get ,key deterred-dashboard-params)
+                        value)))
+              ,name)))
+       (insert " ")
+       (deterred-dashboard--widget-render-option
+        widget (alist-get ,key deterred-dashboard-params)))))
+
+(cl-defmacro deterred-dashboard-widget-completing-read-multiple
+    (&key name key options (prompt "Select: ") (separator ";"))
+  "A widget to select values with `completing-read-multiple'.
+
+NAME is the displayed name, KEY is the key in
+`deterred-dashboard-params'.  OPTIONS can be a list of symbols, a list
+of strings, or an alist with symbols or strings as keys.
+
+PROMPT is passed to `completing-read', SEPARATOR is bound to
+`crm-separator'."
+  (deterred-dashboard--require-arguments name key options)
+  `(progn
+     (let* ((widget-push-button-prefix "")
+            (widget-push-button-suffix "")
+            (widget
+             (widget-create
+              'push-button
+              :notify
+              (lambda (widget &rest _)
+                (let* ((crm-separator ,separator)
+                       (selected (completing-read-multiple ,prompt ,options))
+                       (value (deterred-dashboard--process-completing-read
+                               selected ,options)))
+                  (deterred-dashboard--widget-render-option widget value)
+                  (setf (alist-get ,key deterred-dashboard-params)
+                        value)))
+              ,name)))
+       (insert " ")
+       (deterred-dashboard--widget-render-option
+        widget (alist-get ,key deterred-dashboard-params)))))
 
 (defun deterred-dashboard--print-error (desc err output)
   "Format an error for dashboard.
@@ -436,7 +552,7 @@ output string."
 IMAGES is either one base64-encoded image string or a sequence of them.
 
 PROPS are forwarded to `create-image'."
-  (unless (sequencep images)
+  (when (stringp images)
     (setq images (list images)))
   (insert
    (mapconcat
@@ -453,6 +569,19 @@ PROPS are forwarded to `create-image'."
                 (prin1-to-string err)))))
     images
     "\n")))
+
+(defun deterred-dashboard--get-pythonpath ()
+  "Get PYTHONPATH for DETERRED to load the python module."
+  (let* ((deterred-folder
+          (or
+           (and load-file-name
+                (concat (file-name-directory load-file-name) "python/"))
+           (concat (string-replace "/dashboards" "" default-directory)
+                   "python/"))))
+    (string-join
+     (append (string-split (or (getenv "PYTHONPATH") "") ":" t)
+             (list deterred-folder))
+     ":")))
 
 (cl-defun deterred-dashboard-exec-python
     (&key python-code python-file
@@ -483,8 +612,10 @@ stdout of the process as the sole argument."
     (condition-case err
         (with-temp-buffer
           (insert (json-encode input))
-          (apply  #'call-process-region (point-min) (point-max)
-                  deterred-dashboard-python t t nil args)
+          (let ((process-environment (copy-sequence process-environment)))
+            (setenv "PYTHONPATH" (deterred-dashboard--get-pythonpath))
+            (apply #'call-process-region (point-min) (point-max)
+                   deterred-dashboard-python t t nil args))
           (goto-char (point-min))
           (setq output (buffer-string))
           (setq parsed-output (json-read)))

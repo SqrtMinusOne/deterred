@@ -1,4 +1,4 @@
-;;; deterred-dashboard-dummy.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-dashboard-dummy.el --- A dummy DETERRED dashboard -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,25 +23,34 @@
 
 ;;; Commentary:
 
-;; TODO
+;; A dummy dashboard used to demostrate all functionality.
+
+;;; Code:
 (require 'deterred-dashboard)
 
 (defclass deterred-dashboard-dummy (deterred-dashboard)
-  ((name :initform "Dummy")))
+  ((name :initform "Dummy"))
+  "A dummy dashboard.")
 
 (cl-defmethod deterred-dashboard-list-datasets ((_dashboard deterred-dashboard-dummy))
+  "List datasets for the dummy dashboard."
   '((foo (name . "Foo")
          (tags tag1 tag2))
     (bar (name . "Bar")
          (tags tab1 tag3))))
 
 (cl-defmethod deterred-dashboard-default-params ((_dashboard deterred-dashboard-dummy))
+  "Return default parameters for the dummy dashboard."
   '((:a-range . 10)
     (:a-count . 100)
     (:b-range . 10)
-    (:a-date . 1760114739)))
+    (:a-date . 1760114739)
+    (:a-checkbox . nil)
+    (:a-completing-read . nil)
+    (:a-list . nil)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-dummy))
+  "Render the parameters section for the dummy dashboard."
   (deterred-dashboard-widget-number
    :name "A range"
    :key :a-range)
@@ -58,10 +67,27 @@
    :name "A date"
    :key :a-date
    :display-date t)
+  (insert "\n")
+  (deterred-dashboard-widget-checkbox
+   :name "A checkbox"
+   :key :a-checkbox)
+  (insert "\n")
+  (deterred-dashboard-widget-completing-read
+   :name "A completing read"
+   :key :a-completing-read
+   :options '("a" "b" "c"))
+  (insert "\n")
+  (deterred-dashboard-widget-completing-read-multiple
+   :name "A multiple-options completing read"
+   :key :a-list
+   :options '("foo bar baz" "brr hrr grr" "12345" "prr frr pfff"))
   (insert "\n\n"))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-dummy)
                                                  params)
+  "Fetch datasets for the dummy dashboard.
+
+PARAMS is as returned by `deterred-dashboard-default-params'."
   `((foo . ,(cl-loop for i from 0 to (alist-get :a-count params)
                      collect `((a . ,i)
                                (b . ,(+ i (random (alist-get :a-range params)))))))
@@ -69,7 +95,8 @@
                      collect (list (cons 'baz (random (alist-get :b-range params))))))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-dummy)
-                                                 data)
+                                                 _params data)
+  "Render DATA for the dummy dashboard."
   (insert (deterred-format (f-h2 "Example error") "\n"))
   (deterred-dashboard-exec-python
    :python-code
@@ -106,3 +133,4 @@ print(json.dumps([img]))"
                                         :grid-button t)))
 
 (provide 'deterred-dashboard-dummy)
+;;; deterred-dashboard-dummy.el ends here
