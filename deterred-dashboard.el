@@ -273,10 +273,12 @@ PARAMS is the parameters, DATA is data as returned by
   (unless deterred-dashboards
     (require 'deterred-dashboard-dummy)
     (require 'deterred-dashboard-mpd)
+    (require 'deterred-dashboard-podcasts)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
-                (deterred-dashboard-mpd)))))
+                (deterred-dashboard-mpd)
+                (deterred-dashboard-podcasts)))))
 
 (defun deterred-dashboard-open (dashboard)
   "Open a DETERRED dashboard.

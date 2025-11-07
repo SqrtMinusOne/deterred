@@ -106,7 +106,7 @@ alist, mapping AntennaPod's IDs to DETERRED's IDs."
                   (timestamp . ,(nth 6 datum))))
               listened-data)
      :conflict-action 'do-update
-     :conflict-attrs '(feed_id  item_id))))
+     :conflict-attrs '(feed_id item_id))))
 
 (defun deterred-podcasts-load-antennapod (file)
   "Load an AntennaPod SQLite database file into DETERRED.

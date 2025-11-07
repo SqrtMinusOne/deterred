@@ -1,4 +1,4 @@
-;;; deterred-dashboard-dummy.el --- DETERRED dashboard for MPD -*- lexical-binding: t -*-
+;;; deterred-dashboard-mpd.el --- DETERRED dashboard for MPD -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -402,7 +402,7 @@ print(json.dumps(images))"
        (insert (deterred-format (f-h3 "Listened per week") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
        (insert "\n"))))
-  (insert (deterred-format (f-h2 "New music over years") "\n"))
+  (insert (deterred-format (f-h2 "New music over the years") "\n"))
   (deterred-dashboard-exec-python
    :python-code
    "from matplotlib import pyplot as plt
