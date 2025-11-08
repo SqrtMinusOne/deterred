@@ -152,5 +152,10 @@ VALUE.  Display COMMENT if passed."
           (user-error "Schema validation error"))
       value)))
 
+(defmacro deterred-utils-assert-var-set (var-name)
+  "Signal error is VAR-NAME is nil."
+  `(unless ,var-name
+     (user-error ,(format "%s not set!" var-name))))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

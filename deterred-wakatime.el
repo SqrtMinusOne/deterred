@@ -61,6 +61,11 @@
   :group 'deterred-sources
   :type 'number)
 
+(defcustom deterred-wakatime-process-project-name #'identity
+  "A function to process project name."
+  :group 'deterred-sources
+  :type 'function)
+
 (defun deterred-wakatime--process-project (day-in-project db)
   "Get project ID from DAY-IN-PROJECT.
 
@@ -69,7 +74,8 @@ aggregate of the project activity in a given day.  DB is a SQLite
 object.
 
 Return the project ID."
-  (let* ((name (alist-get 'name day-in-project))
+  (let* ((name (funcall deterred-wakatime-process-project-name
+                        (alist-get 'name day-in-project)))
          (id (uuidgen-3 deterred-wakatime-uuid-namespace name)))
     (sqlite-execute db "INSERT INTO wakatime_projects (id, name) VALUES (?, ?)
                      ON CONFLICT (id) DO NOTHING"
@@ -118,6 +124,149 @@ DB is the sqlite database object."
                            ,@(unless (eq (car key-mapping) 'grand_total)
                                '(name))))))))
 
+(defun deterred-wakatime--get-project-path (filename project-name &optional project)
+  "Convert FILENAME to a local path under PROJECT-NAME.
+
+Or, if PROJECT is non-nil, get project path instead.
+
+FILENAME and PROJECT-NAME are string."
+  (let ((project-found project) items-in-project)
+    (dolist (item (file-name-split filename))
+      (let ((cand-name (funcall deterred-wakatime-process-project-name item)))
+        (when project-found
+          (push item items-in-project))
+        (when (equal cand-name project-name)
+          (if project
+              (setq project-found nil)
+            (setq project-found t)))))
+    (setq items-in-project (nreverse items-in-project))
+    (when items-in-project
+      (apply #'file-name-concat "/" items-in-project))))
+
+(defun deterred-wakatime--postprocess-entities (db)
+  "Update project_path in the wakatime_entities table.
+
+DB is a SQLite connection object."
+  (let* ((projects
+          (deterred-db-select-alist
+           db "SELECT id, name FROM wakatime_projects"))
+         (entities-to-process
+          (deterred-db-select-alist
+           db "SELECT project_id, timestamp, total_seconds, name
+FROM wakatime_entities WHERE project_path IS NULL"))
+         (project-name-by-id (make-hash-table :test #'equal))
+         (project-path-by-file-name (make-hash-table :test #'equal))
+         entities-update-data
+         projects-update-data)
+    ;; Populate `project-name-by-id'
+    (cl-loop for project in projects
+             do (puthash (alist-get 'id project)
+                         (alist-get 'name project)
+                         project-name-by-id))
+    ;; Populate `projects-update-data'
+    (cl-loop for i from 0
+             with total-entities = (seq-length entities-to-process)
+             for entity in entities-to-process
+             for name = (alist-get 'name entity)
+             for project-name = (gethash (alist-get 'project_id entity)
+                                         project-name-by-id)
+             for project-path = (gethash (alist-get 'name entity)
+                                         project-path-by-file-name)
+             unless project-path
+             do (progn
+                  (setq project-path (deterred-wakatime--get-project-path
+                                      name
+                                      project-name))
+                  (when project-path
+                    (puthash name
+                             project-path
+                             project-path-by-file-name)))
+             when project-path
+             do (push `(,@entity
+                        (project_path . ,project-path))
+                      entities-update-data)
+             when (= (% i 100))
+             do (message "Postprocessing %d/%d wakatime entities" i total-entities))
+    (when entities-update-data
+      (deterred-db-insert-unsafe
+       db
+       :table-name 'wakatime_entities
+       :values entities-update-data
+       :conflict-attrs '(project_id timestamp name)
+       :conflict-action 'do-update))))
+
+(defun deterred-wakatime--postprocess-projects (db)
+  "Update project_root in wakatime_projects.
+
+DB is the SQLite connection object."
+  (let ((data (deterred-db-select-alist
+               db "WITH latest_timestamps AS (
+  SELECT
+    project_id,
+    MAX(timestamp) AS max_timestamp
+  FROM wakatime_entities
+  GROUP BY project_id
+),
+ranked_entities AS (
+  SELECT
+    e.project_id,
+    wp.name project_name,
+    e.timestamp,
+    e.total_seconds,
+    e.name,
+    e.type,
+    e.project_path,
+    ROW_NUMBER() OVER (PARTITION BY e.project_id ORDER BY e.name) AS rn
+  FROM wakatime_entities e
+  INNER JOIN latest_timestamps lt
+    ON e.project_id = lt.project_id
+    AND e.timestamp = lt.max_timestamp
+  INNER JOIN wakatime_projects wp ON wp.id = e.project_id
+)
+SELECT
+  project_id,
+  project_name,
+  timestamp,
+  total_seconds,
+  name,
+  type,
+  project_path
+FROM ranked_entities
+WHERE rn = 1")))
+    (deterred-db-insert-unsafe
+     db
+     :table-name 'wakatime_projects
+     :values (seq-filter
+              (lambda (datum) (alist-get 'project_root datum))
+              (mapcar (lambda (datum)
+                        `((id . ,(alist-get 'project_id datum))
+                          (name . ,(alist-get 'project_name datum))
+                          (project_root
+                           . ,(deterred-wakatime--get-project-path
+                               (alist-get 'name datum)
+                               (alist-get 'project_name datum)
+                               t))))
+                      data))
+     :conflict-attrs '(id)
+     :conflict-action 'do-update)))
+
+(defun deterred-wakatime-purge ()
+  "Clear all WakaTime data from the DETERRED database."
+  (interactive)
+  (when (y-or-n-p "Are you sure you want to purge WakaTime data from DETERRED?")
+    (let ((db (deterred-db--init)))
+      (with-sqlite-transaction db
+        (dolist (item deterred-wakatime-key-mappings)
+          (sqlite-execute db (format "DELETE FROM wakatime_%s" (car item))))
+        (sqlite-execute db "DELETE FROM wakatime_projects")
+        (deterred-db-mark-updated-batch
+         db
+         (append
+          (mapcar (lambda (f) (format "wakatime_%s" (car f)))
+                  deterred-wakatime-key-mappings)
+          (list "wakatime_projects")
+          nil))))))
+
 (defun deterred-wakatime-load-json (file)
   "Load Wakatime export FILE into DETERRED."
   (interactive
@@ -139,6 +288,8 @@ DB is the sqlite database object."
             (alist-get 'projects day))
            (message "Processed: %s" (alist-get 'date day))))
        (alist-get 'days data))
+      (deterred-wakatime--postprocess-entities db)
+      (deterred-wakatime--postprocess-projects db)
       (deterred-db-mark-updated-batch
        db
        (append
@@ -230,6 +381,8 @@ large value and download everything, but I haven't tried this."
                     db (alist-get 'date (alist-get 'range day-in-project))
                     day-in-project))
                  (alist-get 'data project-data)))
+              (deterred-wakatime--postprocess-entities db)
+              (deterred-wakatime--postprocess-projects db)
               (deterred-db-mark-updated-batch
                db
                (append
