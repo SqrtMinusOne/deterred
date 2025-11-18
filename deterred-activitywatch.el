@@ -24,6 +24,13 @@
 ;;; Commentary:
 
 ;; ActivityWatch integration for DETERRED.
+;;
+;; This reads the AFK bucket and the currentwindow bucket; the latter
+;; is processed to only include data when the computer isn't not AFK,
+;; and then aggregated by applications per day.  I'm afraid saving
+;; detailed timestamps will increaase the database size too much.
+;;
+;; `deterred-activitywatch-load' starts the loading flow from API.
 
 ;;; Code:
 (require 'deterred-db)

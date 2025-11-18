@@ -1,4 +1,4 @@
-;;; deterred-habits.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-habits.el --- org-habit integration for DETERRED. -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 
@@ -23,7 +23,9 @@
 
 ;;; Commentary:
 
-;; TODO
+;; `org-habit' integration for DETERRED.
+;;
+;; See `deterred-habits-load' for the parsing flow.
 
 ;;; Code:
 (require 'deterred-db)
@@ -37,7 +39,11 @@
   "51038aa1-8fb1-4e05-b697-fa651ba8786d")
 
 (defun deterred-habits--parse-buffer ()
-  "Parse the current `org-habit' buffer."
+  "Parse the current `org-habit' buffer.
+
+The return value is a list of alists with the following keys:
+- `habit' - the habit name;
+- `timestamp'."
   (let (res)
     (org-element-map (org-element-parse-buffer) 'headline
       (lambda (headline)
@@ -126,6 +132,9 @@ SOURCE is an instance of `deterred-habits'."
 
 (cl-defmethod deterred-source-day-summary
   ((_source deterred-habits) timestamp &optional db)
+  "Show daily summary for org-habit.
+
+TIMESTAMP is the UNIX timestamp, DB is the SQLite connection object."
   (let ((db (or db (deterred-db--init)))
         (habits
          (deterred-db-select-alist

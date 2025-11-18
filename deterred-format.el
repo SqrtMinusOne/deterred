@@ -94,8 +94,6 @@ See `deterred-format-accessor' for details."
 (defmacro deterred-format-accessor (accessor)
   "Convert ACCESSOR into an elisp expression.
 
-TODO doc better.
-
 A drill-down string a specifier-separated list of keys.  The available
 specifiers are as follows:
 - -> for `alist-get'.  E.g.:

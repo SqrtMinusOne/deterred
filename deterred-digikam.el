@@ -1,4 +1,4 @@
-;;; deterred-digikam.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-digikam.el --- digiKam integration for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 

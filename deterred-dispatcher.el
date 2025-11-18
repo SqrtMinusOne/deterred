@@ -1,4 +1,4 @@
-;;; deterred-dispatcher.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-dispatcher.el --- Dispatcher UI for DETERRED. -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -98,7 +98,7 @@ No idea what I'm doing wrong, but this seems to help."
   (setq-local buffer-read-only t))
 
 (defun deterred-dispatcher--render-sources ()
-  "Renderer `deterred-sources' for `deterred-dispatcher'."
+  "Render `deterred-sources' for `deterred-dispatcher'."
   (magit-insert-section (deterred-info-sources)
     (insert (propertize
              (format "Active sources: %s" (length deterred-sources))
@@ -159,6 +159,18 @@ No idea what I'm doing wrong, but this seems to help."
           (insert "\n"))))))
 
 (defun deterred-dispatcher--on-this-day-data (&optional db)
+  "Render the \"On this day\" section for DETERRED dispatcher.
+
+DB is a SQLite connection object.
+
+This interates overs sources in `deterred-sources' and invokes
+`deterred-source-day-summary' on each.
+
+Returns the following nested alists structure:
+- Timestamp
+  - Source name (as given by the `name' slot)
+    - `:source' - instance of datasource
+    - all keys of `deterred-source-day-summary'."
   (let ((db (or db (deterred-db--init)))
         res)
     (mapcar
@@ -188,6 +200,13 @@ No idea what I'm doing wrong, but this seems to help."
     res))
 
 (defun deterred-dispatcher--day-data (&optional db timestamp)
+  "Return data for a particular TIMESTAMP.
+
+DB is a SQLite connection object.
+
+The return value is the same as in
+`deterred-dispatcher--on-this-day-data', but only the value for the
+given timestamp."
   (let ((db (or db (deterred-db--init)))
         datum)
     (mapcar
@@ -207,6 +226,9 @@ No idea what I'm doing wrong, but this seems to help."
     datum))
 
 (defun deterred-dispatcher--render-timestamp (timestamp datum)
+  "Render one DATUM for TIMESTAMP.
+
+DATUM is as returned by `deterred-dispatcher--on-this-day-data'."
   (magit-insert-section (deterred-dispatcher-on-this-day-day timestamp nil)
     (insert (propertize
              (format "%s, %s"
@@ -235,6 +257,9 @@ No idea what I'm doing wrong, but this seems to help."
     (insert "\n")))
 
 (defun deterred-dispatcher-day (timestamp)
+  "Get summary for one particular day.
+
+TIMESTAMP is a UNIX timestamp."
   (interactive (list (time-convert (org-read-date nil t) #'integer)))
   (let ((datum (deterred-dispatcher--day-data nil timestamp))
         (buffer-name (format "*DETERRED-<%s>*" (format-time-string "%F" timestamp))))
@@ -255,6 +280,9 @@ No idea what I'm doing wrong, but this seems to help."
               (magit-section-show magit-root-section))))))))
 
 (defun deterred-dispatcher--render-on-this-day (&optional db)
+  "Render the \"On this day\" section for DETERRED.
+
+DB is the SQLite connection object."
   (let* ((db (or db (deterred-db--init)))
          (data (deterred-dispatcher--on-this-day-data db)))
     (magit-insert-section (deterred-dispatcher-on-this-day)
@@ -265,6 +293,7 @@ No idea what I'm doing wrong, but this seems to help."
        do (deterred-dispatcher--render-timestamp timestamp datum)))))
 
 (defun deterred-dispatcher--render-actions ()
+  "Render the \"Actions\" section for DETERRED."
   (widget-create 'push-button
                  :notify (lambda (&rest _)
                            (call-interactively #'deterred-dashboard-open))

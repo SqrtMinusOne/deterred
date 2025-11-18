@@ -309,10 +309,10 @@ print(json.dumps(images))"
    :on-success
    (lambda (images)
      (insert (deterred-format (f-h3 "Podcasts discovered per year") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 1))
+     (deterred-dashboard-print-images-base64 (elt images 0))
      (insert "\n")
      (insert (deterred-format (f-h3 "Hours listened to new podcasts per year") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 0))
+     (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n")))
   (insert
    (deterred-format (f-h2 "Listening dynamics"))  "\n"

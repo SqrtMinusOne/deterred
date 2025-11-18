@@ -265,7 +265,7 @@ LIMIT 20"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', msl.timestamp, 'unixepoch') month,
+  strftime('%Y-%W', msl.timestamp, 'unixepoch') week,
   sum(ms.duration) * 100 / (60 * 60) / 100.0 total
 FROM mpd_song_listened msl
 INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id

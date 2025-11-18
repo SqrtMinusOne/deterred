@@ -1,4 +1,4 @@
-;;; deterred-utils.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-utils.el --- Different utility functions for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Different utility functions for DETERRED.
 
 ;;; Code:
 (require 'pcsv)

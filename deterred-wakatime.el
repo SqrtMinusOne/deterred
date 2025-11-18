@@ -1,4 +1,4 @@
-;;; deterred-wakatime.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-wakatime.el --- WakaTime integration for DETERRED. -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,7 +23,13 @@
 
 ;;; Commentary:
 
-;; TODO
+;; WakaTime integration for DETERRED.
+;;
+;; This provides can integrate either via WakaTime dump
+;; (`deterred-wakatime-load-json') or via the API
+;; (`deterred-wakatime-api-load').  The former way is preferreable
+;; because the API doesn't seem to be particularly stable, and it only
+;; gives the last 7 days anyway.
 
 ;;; Code:
 (require 'deterred-db)
@@ -56,7 +62,7 @@
   :group 'deterred-sources
   :type 'string)
 
-(defcustom deterred-wakatime-api-range 14
+(defcustom deterred-wakatime-api-range 7
   "How many days in the past to include in API export."
   :group 'deterred-sources
   :type 'number)

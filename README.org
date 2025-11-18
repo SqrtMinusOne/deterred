@@ -2,10 +2,133 @@
 
 Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard
 
+* Current configuration
 #+begin_src emacs-lisp
 (use-package libmpdel
   :straight t)
 
 (use-package pcsv
   :straight t)
+
+(use-package uuidgen
+  :straight t)
+
+(use-package validate
+  :straight t)
+
+(setq deterred-sources
+      (list
+       (deterred-activitywatch)
+       (deterred-digikam :digikam-db "~/30-39 Life/35 Photos/35.00D DigiKam/digikam4.db")
+       (deterred-habits :org-files '("~/30-39 Life/32 org-mode/misc/habit.org"))
+       ;; (deterred-locations)
+       (deterred-mastodon :server "https://mastodon.bsd.cafe/"
+                          :account-id 113136872089175263)
+       (deterred-messengers)
+       (deterred-mpd)
+       (deterred-org-journal-tags)
+       (deterred-read-it-later :sources '(readeck))
+       (deterred-reddit)
+       (deterred-podcasts)
+       (deterred-wakatime)))
+
+(setq deterred-backups-location "/home/pavel/10-19 Code/13 Other Projects/13.02 sqrt-data/13.02.B Backups/13.02.B.01 deterred/")
+(setq deterred-dashboard-python "/home/pavel/micromamba/envs/deterred/bin/python")
+(setq deterred-messengers-my-id "30aeaf45-cfc7-3e69-bbdf-35eb8666d29e")
+(setq deterred-digikam-folder "~/30-39 Life/35 Photos/")
+(setq deterred-wakatime-api-key (my/password-store-get "My_Online/APIs/wakatime"))
+(setq deterred-wakatime-project-name-map
+      '(("digital-nlp-docs-3" . "digital-nlp-docs-3 (Graduate)")
+        ("digital-nlp-docs" . "digital-nlp-docs (Master's)")))
+(setq deterred-wakatime-process-project-name
+      (lambda (name)
+        (let ((result (string-replace
+                       "\\" ""
+                       (my/index--bare-project-name name))))
+          (or (alist-get result deterred-wakatime-project-name-map
+                         nil nil #'equal)
+              result))))
+(setq deterred-read-it-later-readeck-token
+      (my/password-store-get-field "Selfhosted/readeck" "deterred_api_token"))
+(setq deterred-read-it-later-readeck-url "https://readeck.sqrtminusone.xyz/")
+(setq deterred-read-it-later-wallabag-url "https://wallabag.sqrtminusone.xyz/")
+(setq deterred-read-it-later-wallabag-client-id
+      (my/password-store-get-field "Selfhosted/wallabag" "client_id"))
+(setq deterred-read-it-later-wallabag-client-secret
+      (my/password-store-get-field "Selfhosted/wallabag" "client_secret"))
+(setq deterred-read-it-later-wallabag-username
+      (my/password-store-get-field "Selfhosted/wallabag" "username"))
+(setq deterred-read-it-later-wallabag-password
+      (my/password-store-get "Selfhosted/wallabag"))
 #+end_src
+
+* Datasources
+| Name               | Status | Source            |
+|--------------------+--------+-------------------|
+| [[https://github.com/ActivityWatch/activitywatch][ActivityWatch]]      | +      | API               |
+| [[https://github.com/AntennaPod/AntennaPod][AntennaPod]]         | +      | Database (SQLite) |
+| [[https://orgmode.org/manual/Tracking-your-habits.html][org-habit]]          | +      | Org files         |
+| [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]]   | +      | Database          |
+| [[https://joinmastodon.org/][Mastodon]]           | +      | API               |
+| [[https://www.musicpd.org/][MPD]]                | +      | Daemon, CSV       |
+| [[https://telegram.org/][Telegram]]           | +      | JSON dump         |
+| [[https://wakatime.com/][WakaTime]]           | +      | JSON dump, API    |
+| [[https://www.digikam.org/][digiKam]]            | +      | Database (SQLite) |
+| [[https://readeck.org/en/][Readeck]]            | +      | API               |
+| [[https://wallabag.org/][Wallabag]]           | +      | API               |
+| [[https://reddit.com/][Reddit]]             | +      | CSV dump          |
+| [[https://manifold.markets/][Manifold]]           |        | API               |
+| hledger            |        | CLI               |
+| org-agenda         |        | Org files         |
+| org-roam           |        | Database + git    |
+| [[https://open-meteo.com/][Open Meteo]] ([[https://github.com/SqrtMinusOne/biome][BIOME]]) |        | API               |
+| GitHub             |        | API               |
+| GitLab             |        | API               |
+| Discord            |        | CSV dump          |
+| [[https://notmuchmail.org/][notmuch]]            |        | Database          |
+
+* Plans
+Interfaces:
+- [ ] MPD songs without lang?
+- [ ] Location edit UI?
+- [ ] Location check UI via digiKam
+- [ ] Generalize daily summary to range summary where possible (e.g. weekly summary)
+- [ ] Event list per day
+
+Meta:
+- [ ] Add datasets. They'll only load data but not integrate with the dispatcher.
+- [ ] Common dialog for SQL errors
+- [X] Common dialog for request errors
+- [X] Extract faces?
+
+Dashboards:
+- [X] MPD
+- [X] Podcasts
+- [X] WakaTime
+- [ ] ActivityWatch
+- [ ] Photos
+- [ ] Read it Later
+- [ ] Org Journal
+- [ ] Messengers
+- [ ] Social: VK, Reddit, Mastodon, Discord, Manifold
+
+Read it Later:
+- [ ] Source language UI?
+
+Datasets:
+- Parse Twitter http://web.archive.org/web/20230103104809/https://twitter.com/sqrtminustwo
+- =books.org= file?
+
+MPD:
+- [X] fix timestamps migrated
+- [X] fix missing records before 2025-03-29
+
+ActivityWatch:
+- [ ] Load from CSV for the old =sqrt-data=
+- [ ] Load for the database.
+
+Messengers:
+- [ ] Load VK dump
+
+WakaTime:
+- [X] Integrate with dired

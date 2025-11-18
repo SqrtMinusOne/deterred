@@ -39,7 +39,9 @@
 ;; Some other useful functions:
 ;; - `deterred-db-insert-unsafe' to insert data;
 ;; - `deterred-db-cleanup-unsafe' to delete data;
-;; - `deterred-db-select-alist' to select rows into alists.
+;; - `deterred-db-select-alist' to select rows into alists;
+;; - `deterred-db-select-template' to select with templating;
+;; - `deterred-db-select-template-alist'.
 
 ;;; Code:
 (require 'seq)

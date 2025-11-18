@@ -341,8 +341,7 @@ SOURCE is the instance of `deterred-read-it-later'."
                            (f-acc "iter->'host")
                            (lambda (&rest _)
                              (browse-url (alist-get iter 'url)))))
-              articles))
-         )))))
+              articles)))))))
 
 (provide 'deterred-read-it-later)
 ;;; deterred-read-it-later.el ends here

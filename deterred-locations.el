@@ -1,4 +1,4 @@
-;;; deterred-locations.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-locations.el --- Locations functionality for DETERRED. -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2024 Korytov Pavel
 

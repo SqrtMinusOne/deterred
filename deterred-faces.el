@@ -1,4 +1,4 @@
-;;; deterred-dispatcher.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-dispatcher.el --- Faces configuration for DETERRED -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 
-;; TODO
+;; Faces configuration for DETERRED.
 
 ;;; Code:
 (require 'magit-section)

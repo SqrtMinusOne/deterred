@@ -1,4 +1,4 @@
-;;; deterred-wakatime-dired.el --- TODO -*- lexical-binding: t -*-
+;;; deterred-wakatime-dired.el --- WakaTime & Dired integration. -*- lexical-binding: t -*-
 
 ;; Copyright (C) 2025 Korytov Pavel
 
@@ -23,7 +23,13 @@
 
 ;;; Commentary:
 
-;; TODO
+;; WakaTime and Dired integration using DETERRED.
+;;
+;; This adds two things:
+;; - `deterred-wakatime-dired-mode' - shows the amount of time spent per
+;;   directory;
+;; - `deterred-wakatime-dired-dashboard' - invokes the WakaTime
+;;   dashboard for all projects in the current directory.
 
 ;;; Code:
 (require 'deterred-db)
