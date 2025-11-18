@@ -319,9 +319,7 @@ If PROJECT-NAME is non-nil, filter by it."
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
                   (funcall callback data)))
-      :error (cl-function
-              (lambda (&key data error-thrown &allow-other-keys)
-                (message "Error!: %S" error-thrown))))))
+      :error #'deterred-utils-on-request-error)))
 
 (defun deterred-wakatime--api-get-summary-recursive
     (project-names callback &optional data)

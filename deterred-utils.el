@@ -152,6 +152,43 @@ VALUE.  Display COMMENT if passed."
           (user-error "Schema validation error"))
       value)))
 
+(cl-defun deterred-utils-on-request-error (&key response &allow-other-keys)
+  "Display error RESPONSE in a buffer."
+  (let ((data (request-response-data response))
+        (error-thrown (request-response-error-thrown response))
+        (status-code (request-response-status-code response))
+        (symbol-status (request-response-symbol-status response))
+        (url (request-response-url response))
+        (settings (request-response-settings response))
+        (raw-headers (request-response--raw-header response))
+        (raw-body (when (buffer-live-p (request-response--buffer response))
+                    (with-current-buffer (request-response--buffer response)
+                      (buffer-string)))))
+    (if error-thrown
+        (let ((buf (generate-new-buffer "*deterred-error-report*")))
+          (with-current-buffer buf
+            (insert
+             (deterred-format
+              (f-h1 "Request error") "\n"
+              "Request has returned status " (f-ace (f-num (or status-code -1)) 'error)
+              " " (prin1-to-string error-thrown) "\n"
+              "URL: " (f-ace url 'link) "\n\n"
+              (f-h2 "Response Body") "\n"
+              (or raw-body (prin1-to-string data) "(no body available)")
+              "\n\n"
+              (f-h2 "Raw Headers") "\n"
+              (or raw-headers "(not available)")
+              "\n\n"
+              (f-h2 "Request Headers") "\n"
+              (mapconcat (lambda (h) (format "%s: %s" (car h) (cdr h)))
+                         (plist-get settings :headers) "\n")
+              "\n\n"
+              (f-h2 "Params") "\n"
+              (prin1-to-string (plist-get settings :params))))
+            (goto-char (point-min))
+            (deterred-utils-report-mode))
+          (display-buffer buf)))))
+
 (defmacro deterred-utils-assert-var-set (var-name)
   "Signal error is VAR-NAME is nil."
   `(unless ,var-name

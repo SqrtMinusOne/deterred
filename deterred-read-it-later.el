@@ -86,7 +86,8 @@ Has to have the \"Bookmarks: Read Only\" role."
          (host (string-replace "www." "" (url-host parsed))))
     host))
 
-(defun deterred-read-it-later--readeck-list (callback &optional results page)
+(defun deterred-read-it-later--readeck-list (callback &optional results page
+                                                      start-timestamp)
   "List all read articles from Readeck.
 
 Call CALLBACK with the results.  PAGE and RESULTS are the recursive
@@ -99,7 +100,9 @@ parameters."
     :params `(("limit" . 30)
               ("offset" . ,(* page 30))
               ("sort" . "created")
-              ("is_archived" . "true"))
+              ("is_archived" . "true")
+              ,@(when start-timestamp
+                  `(("range_start" . ,start-timestamp))))
     :headers `(("Authorization"
                 . ,(concat "Bearer " deterred-read-it-later-readeck-token)))
     :success
@@ -110,37 +113,41 @@ parameters."
                             response "total-pages"))))
          (message "Parsing Readeck: %s/%s" page total-pages)
          (setq results
-               (append results
-                       (cl-mapcar
-                        (lambda (datum)
-                          `((id . ,(deterred-read-it-later--id
-                                    (alist-get 'id datum)
-                                    "readeck"))
-                            (href . ,(concat deterred-read-it-later-readeck-url
-                                             "bookmarks/"
-                                             (alist-get 'id datum)))
-                            (url . ,(alist-get 'url datum))
-                            (title . ,(alist-get 'title datum))
-                            (host . ,(deterred-read-it-later--host
-                                      (alist-get 'url datum)))
-                            (created_at
-                             . ,(time-convert
-                                 (encode-time
-                                  (iso8601-parse (alist-get 'created datum)))
-                                 'integer))
-                            (read_at
-                             . ,(time-convert
-                                 (encode-time
-                                  (iso8601-parse (alist-get 'updated datum)))
-                                 'integer))
-                            (provider . "readeck")))
-                        data)))
+               (append
+                results
+                (cl-mapcar
+                 (lambda (datum)
+                   (let ((created-at (time-convert
+                                      (encode-time
+                                       (iso8601-parse (alist-get 'created datum)))
+                                      'integer)))
+                     (setq deterred-read-it-later--readeck-sync-timestamp
+                           (max (or deterred-read-it-later--readeck-sync-timestamp 0)
+                                created-at))
+                     `((id . ,(deterred-read-it-later--id
+                               (alist-get 'id datum)
+                               "readeck"))
+                       (href . ,(concat deterred-read-it-later-readeck-url
+                                        "bookmarks/"
+                                        (alist-get 'id datum)))
+                       (url . ,(alist-get 'url datum))
+                       (title . ,(alist-get 'title datum))
+                       (host . ,(deterred-read-it-later--host
+                                 (alist-get 'url datum)))
+                       (created_at . ,created-at)
+                       (read_at
+                        . ,(time-convert
+                            (encode-time
+                             (iso8601-parse (alist-get 'updated datum)))
+                            'integer))
+                       (provider . "readeck"))))
+                 data)))
          (if (>= total-pages page)
-             (deterred-read-it-later--readeck-list callback results (1+ page))
+             (deterred-read-it-later--readeck-list callback results (1+ page)
+                                                   start-timestamp)
+           (setq deterred-read-it-later--readeck-sync-timestamp nil)
            (funcall callback results)))))
-    :error (cl-function
-            (lambda (&key data error-thrown &allow-other-keys)
-              (message "Error!: %S" error-thrown)))))
+    :error #'deterred-utils-on-request-error))
 
 (defun deterred-read-it-later--wallabag-authorize (callback)
   "Authorize in the Wallabag instance.
@@ -159,9 +166,7 @@ Call CALLBACK with the access token."
     :success (cl-function
               (lambda (&key data &allow-other-keys)
                 (funcall callback (alist-get 'access_token data))))
-    :error (cl-function
-            (lambda (&key data error-thrown &allow-other-keys)
-              (message "Error!: %S" error-thrown)))))
+    :error #'deterred-utils-on-request-error))
 
 (defun deterred-read-it-later--wallabag-list (callback &optional token page results)
   "List all read articles from Wallabag.
@@ -218,9 +223,7 @@ parameters; TOKEN is retrieved on the first pass."
                (deterred-read-it-later--wallabag-list
                 callback token (1+ page) results)
              (funcall callback results)))))
-      :error (cl-function
-              (lambda (&key data error-thrown &allow-other-keys)
-                (message "Error!: %S" error-thrown))))))
+      :error #'deterred-utils-on-request-error)))
 
 (defun deterred-read-it-later--store (results)
   "Store RESULTS in the database.
@@ -235,6 +238,18 @@ TODO document RESULTS."
        :conflict-action 'do-nothing)
       (deterred-db-mark-updated db 'read_it_later_article))))
 
+(defun deterred-read-it-later--get-start-timestamp (provider)
+  "Get last timestamp saved for PROVIDER."
+  (let ((db (deterred-db--init)))
+    (caar (deterred-db-select-template
+           db
+           "SELECT max(created_at) FROM read_it_later_article
+WHERE provider = :provider"
+           `((:provider . ,provider))))))
+
+(defvar deterred-read-it-later--readeck-sync-timestamp nil
+  "Timestamp used to resume sync it case it fails.")
+
 (defun deterred-read-it-later-readeck-sync (&optional callback)
   "Sync Readeck with DETERRED.
 
@@ -245,7 +260,9 @@ Call CALLBACK when done."
   (deterred-read-it-later--readeck-list
    (lambda (data)
      (deterred-read-it-later--store data)
-     (when callback (funcall callback)))))
+     (when callback (funcall callback)))
+   nil nil
+   deterred-read-it-later--readeck-sync-timestamp))
 
 (defun deterred-read-it-later-wallabag-sync (&optional callback)
   "Sync Wallabag with DETERRED.

@@ -110,9 +110,7 @@ loading logic might depend on the AFK bucket."
                   (deterred-activitywatch--bucket-store-afk data hostname)
                   (when callback
                     (funcall callback))))
-      :error (cl-function
-              (lambda (&key error-thrown &allow-other-keys)
-                (message "Error!: %S" error-thrown))))))
+      :error #'deterred-utils-on-request-error)))
 
 (defun deterred-activitywatch--bucket-load-afk-recursive (buckets callback)
   "Recursively load afk BUCKETS and call CALLBACK when done."
@@ -331,9 +329,7 @@ convinience).  Used internally for recursion."
                        db day hostname data)
                       (deterred-activitywatch--load-currentwindow
                        bucket-id hostname nil callback (cdr days))))
-          :error (cl-function
-                  (lambda (&key error-thrown &allow-other-keys)
-                    (message "Error!: %S" error-thrown)))))
+          :error #'deterred-utils-on-request-error))
     (when callback (funcall callback))))
 
 (defun deterred-activitywatch-load (&optional callback)
@@ -376,9 +372,7 @@ If CALLBACK is non-nil, call it when the sync is done."
                     (when (eql synced (seq-length buckets-to-sync))
                       (when callback (funcall callback))))))
                 (_ nil))))))))
-    :error (cl-function
-            (lambda (&key error-thrown &allow-other-keys)
-              (message "Error!: %S" error-thrown)))))
+    :error #'deterred-utils-on-request-error))
 
 (defclass deterred-activitywatch (deterred-source)
   ((name :initform "ActivityWatch")

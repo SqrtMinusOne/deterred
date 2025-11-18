@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-source)
+(require 'deterred-utils)
 (require 'cl-lib)
 
 (defconst deterred-mastodon-uuid-namespace
@@ -154,9 +155,7 @@ Call CALLBACK when done."
                            max-id rate-limit-remaining)
                   (deterred-mastodon-sync server account-id max-id stop-id
                                           callback))))))
-      :error (cl-function
-              (lambda (&key error-thrown &allow-other-keys)
-                (message "Error!: %S" error-thrown))))))
+      :error #'deterred-utils-on-request-error)))
 
 (defclass deterred-mastodon (deterred-source)
   ((name :initform "Mastodon")

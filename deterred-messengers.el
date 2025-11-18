@@ -217,7 +217,6 @@ DB is the sqlite database object."
                         (lambda (datum) (intern (alist-get 'type datum)))
                         day-data)))
     (when day-data
-      (setq my/test day-data)
       `((:short-description
          . ,(format "%s/%s in groups; %s/%s in personal"
                     (or (car (alist-get 'group msg-by-type)) 0)
