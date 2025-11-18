@@ -274,16 +274,19 @@ PARAMS is the parameters, DATA is data as returned by
     (require 'deterred-dashboard-dummy)
     (require 'deterred-dashboard-mpd)
     (require 'deterred-dashboard-podcasts)
+    (require 'deterred-dashboard-wakatime)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
                 (deterred-dashboard-mpd)
-                (deterred-dashboard-podcasts)))))
+                (deterred-dashboard-podcasts)
+                (deterred-dashboard-wakatime)))))
 
-(defun deterred-dashboard-open (dashboard)
+(defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.
 
-DASHBOARD is a dashboard object."
+DASHBOARD is a dashboard object.  OVERRIDE-PARAMS is the parameters
+object."
   (interactive
    (list
     (progn
@@ -296,11 +299,13 @@ DASHBOARD is a dashboard object."
         (alist-get
          (completing-read "Dashboard: " dashboards-by-name nil t)
          dashboards-by-name nil nil #'equal)))))
-  (let* ((params (copy-tree
-                  (deterred-dashboard-default-params dashboard)))
+  (let* ((params (copy-tree (deterred-dashboard-default-params dashboard)))
          (name (oref dashboard name))
          (buffer (generate-new-buffer (format "*DETERRED-dashboard-%s*" name)))
          (inhibit-read-only t))
+    (when override-params
+      (cl-loop for (k . v) in override-params
+               do (setf (alist-get k params) v)))
     (with-current-buffer buffer
       (deterred-dashboard-mode)
       (setq-local deterred-dashboard-params params)
@@ -497,7 +502,7 @@ PROMPT is passed to `completing-read'."
                 (let* ((selected (completing-read ,prompt ,options))
                        (value (deterred-dashboard--process-completing-read
                                selected ,options)))
-                  (deterred-dashboard--widget-render-option widget value)
+                  (deterred-dashboard--widget-render-option widget selected)
                   (setf (alist-get ,key deterred-dashboard-params)
                         value)))
               ,name)))
@@ -528,7 +533,7 @@ PROMPT is passed to `completing-read', SEPARATOR is bound to
                        (selected (completing-read-multiple ,prompt ,options))
                        (value (deterred-dashboard--process-completing-read
                                selected ,options)))
-                  (deterred-dashboard--widget-render-option widget value)
+                  (deterred-dashboard--widget-render-option widget selected)
                   (setf (alist-get ,key deterred-dashboard-params)
                         value)))
               ,name)))
@@ -585,6 +590,9 @@ PROPS are forwarded to `create-image'."
              (list deterred-folder))
      ":")))
 
+(defvar deterred-dashboard--pythonpath (deterred-dashboard--get-pythonpath)
+  "PYTHONPATH for DETERRED.")
+
 (cl-defun deterred-dashboard-exec-python
     (&key python-code python-file
           input (on-error #'deterred-dashboard--print-error)
@@ -615,7 +623,7 @@ stdout of the process as the sole argument."
         (with-temp-buffer
           (insert (json-encode input))
           (let ((process-environment (copy-sequence process-environment)))
-            (setenv "PYTHONPATH" (deterred-dashboard--get-pythonpath))
+            (setenv "PYTHONPATH" deterred-dashboard--pythonpath)
             (apply #'call-process-region (point-min) (point-max)
                    deterred-dashboard-python t t nil args))
           (goto-char (point-min))

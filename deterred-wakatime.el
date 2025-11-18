@@ -222,6 +222,7 @@ ranked_entities AS (
     ON e.project_id = lt.project_id
     AND e.timestamp = lt.max_timestamp
   INNER JOIN wakatime_projects wp ON wp.id = e.project_id
+  WHERE e.type = 'file'
 )
 SELECT
   project_id,
