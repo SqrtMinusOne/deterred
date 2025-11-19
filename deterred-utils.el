@@ -194,5 +194,15 @@ VALUE.  Display COMMENT if passed."
   `(unless ,var-name
      (user-error ,(format "%s not set!" var-name))))
 
+(defmacro deterred-utils-make-alist (&rest vars)
+  "Make an alist from VARS.
+
+VARS is a list of symbols."
+  `(list
+    ,@(mapcar
+       (lambda (var)
+         `(cons ',var ,var))
+       vars)))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here
