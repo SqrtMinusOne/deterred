@@ -35,6 +35,11 @@
 ;; CSV import from old sqrt-data project is available via:
 ;; - `deterred-activitywatch-import-afkstatus-csv' for afkstatus data
 ;; - `deterred-activitywatch-import-notafk-window-csv' for notafk_window data
+;;
+;; Export ActivityWatch SQLite databases to JSON:
+;; - `deterred-activitywatch-export-sqlite-to-json' converts SQLite
+;;   databases to JSON format for import into ActivityWatch (which
+;;   only supports JSON import)
 
 ;;; Code:
 (require 'deterred-db)
@@ -65,6 +70,11 @@ I set this to \"Emacs\" because this usually means EXWM for me."
   "Show that many top apps in the daily ActivityWatch summary."
   :group 'deterred-sources
   :type 'number)
+
+(defcustom deterred-activitywatch-export-bucket-types '("currentwindow" "afkstatus")
+  "List of bucket types to export when converting SQLite to JSON."
+  :group 'deterred-sources
+  :type '(repeat string))
 
 (defun deterred-activitywatch--bucket-store-afk (events hostname)
   "Store AFK EVENTS for HOSTNAME in DETERRED.
@@ -455,6 +465,87 @@ Existing records are not overwritten."
         (deterred-db-mark-updated db 'activitywatch_currentwindow_agg)))
     (message "Imported %d currentwindow records from %s (aggregated from %d rows)"
              (length values) file (length data))))
+
+(defun deterred-activitywatch-export-sqlite-to-json (sqlite-file output-file)
+  "Export ActivityWatch SQLITE-FILE to OUTPUT-FILE in JSON format.
+
+I've made this because I have some old ActivityWatch databases, and
+while the application supports importing old data, it can only do so
+from its JSON exports.
+
+SQLITE-FILE should be an ActivityWatch SQLite database with tables:
+- bucketmodel: key, id, created, name, type, client, hostname
+- eventmodel: id, bucket_id, timestamp, duration, datastr
+
+Only buckets with types listed in
+`deterred-activitywatch-export-bucket-types' are exported.
+
+The output is a JSON file with the following structure:
+- buckets: hash table keyed by bucket id
+  - created: bucket creation timestamp
+  - name: bucket name
+  - type: bucket type
+  - client: client name
+  - hostname: hostname
+  - events: list of events
+    - timestamp: event timestamp
+    - duration: event duration
+    - data: event data (parsed from datastr JSON)"
+  (interactive
+   (list
+    (read-file-name "ActivityWatch SQLite file: " nil nil t nil
+                    (lambda (f)
+                      (or (file-directory-p f)
+                          (string-match-p (rx ".db" eos) f))))
+    (read-file-name "Output JSON file: " nil nil nil nil
+                    (lambda (f)
+                      (or (file-directory-p f)
+                          (string-match-p (rx ".json" eos) f))))))
+  (let* ((aw-db (sqlite-open sqlite-file))
+         (type-list (mapconcat (lambda (type) (format "'%s'" type))
+                               deterred-activitywatch-export-bucket-types
+                               ", "))
+         (buckets-data
+          (deterred-db-select-alist
+           aw-db
+           (format
+            "SELECT key, id, created, name, type, client, hostname
+             FROM bucketmodel
+             WHERE type IN (%s)"
+            type-list)))
+         (result (make-hash-table :test 'equal)))
+    (dolist (bucket buckets-data)
+      (let* ((key (alist-get 'key bucket))
+             (bucket-id (alist-get 'id bucket))
+             (events-data
+              (deterred-db-select-alist
+               aw-db
+               "SELECT timestamp, duration, datastr
+                FROM eventmodel
+                WHERE bucket_id = ?
+                ORDER BY timestamp"
+               (list key)))
+             (events
+              (mapcar
+               (lambda (event)
+                 (let ((datastr (alist-get 'datastr event)))
+                   `((timestamp . ,(alist-get 'timestamp event))
+                     (duration . ,(alist-get 'duration event))
+                     (data . ,(json-read-from-string datastr)))))
+               events-data))
+             (bucket-data
+              `((created . ,(alist-get 'created bucket))
+                (id . ,(alist-get 'id bucket))
+                (name . ,(alist-get 'name bucket))
+                (type . ,(alist-get 'type bucket))
+                (client . ,(alist-get 'client bucket))
+                (hostname . ,(alist-get 'hostname bucket))
+                (events . ,events))))
+        (puthash bucket-id bucket-data result)))
+    (sqlite-close aw-db)
+    (with-temp-file output-file
+      (insert (json-encode `((buckets . ,result)))))
+    (message "Exported %d buckets to %s" (hash-table-count result) output-file)))
 
 (defun deterred-activitywatch-load (&optional callback)
   "Load data from ActivityWatch API into DETERRED.
