@@ -91,6 +91,7 @@
     (artists-discovered (name . "Artists discovered"))
     (albums-discovered (name . "Albums discovered"))
     (new-albums-listened (name . "Hours listened to new albums by year"))
+    (average-album-age-per-month (name . "Average album age per month"))
     (top-days (name . "Top days by listened time"))
     (top-weeks (name . "Top weeks by listened time"))
     (top-months (name . "Top months by listened time"))
@@ -316,6 +317,54 @@ INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
 INNER JOIN top_artists ta ON ta.album_artist = ms.album_artist
 WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
 GROUP BY strftime('%Y-%m', msl.timestamp, 'unixepoch'), ms.album_artist"
+           params))
+      (average-album-age-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH album_discovered_months AS (
+  SELECT
+    CAST(STRFTIME('%Y', min(timestamp), 'unixepoch') AS INTEGER) * 12 +
+    CAST(STRFTIME('%m', min(timestamp), 'unixepoch') AS INTEGER) start_month,
+    ms.album_artist,
+    ms.album
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  GROUP BY ms.album_artist, ms.album
+), hours_per_month AS (
+  SELECT
+    STRFTIME('%Y-%m', msl.timestamp, 'unixepoch') \"month\",
+    SUM(ms.duration) / (60.0 * 60.0) hours_spent
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  WHERE 1 = 1 [[AND msl.timestamp >= :start-date]] [[AND msl.timestamp <= :end-date]]
+    [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+  GROUP BY STRFTIME('%Y-%m', msl.timestamp, 'unixepoch')
+), album_data AS (
+  SELECT
+    (
+      (
+        CAST(STRFTIME('%Y', msl.timestamp, 'unixepoch') AS INTEGER) * 12 +
+        CAST(STRFTIME('%m', msl.timestamp, 'unixepoch') AS INTEGER)
+      ) - adm.start_month
+    ) album_age,
+    SUM(ms.duration / (60.0 * 60.0)) / hpm.hours_spent fraction,
+    STRFTIME('%Y-%m', msl.timestamp, 'unixepoch') \"month\",
+    ms.album_artist,
+    ms.album
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  INNER JOIN album_discovered_months adm ON adm.album_artist = ms.album_artist AND adm.album = ms.album
+  INNER JOIN hours_per_month hpm ON hpm.month = STRFTIME('%Y-%m', msl.timestamp, 'unixepoch')
+  WHERE 1 = 1
+    [[AND msl.timestamp >= :start-date]] [[AND msl.timestamp <= :end-date]]
+    [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+  GROUP BY STRFTIME('%Y-%m', msl.timestamp, 'unixepoch'), ms.album_artist, ms.album
+  ORDER BY month, fraction DESC
+)
+SELECT sum(album_age * fraction) age, month
+FROM album_data
+GROUP BY month
+ORDER BY month ASC"
            params)))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-mpd)
@@ -410,6 +459,7 @@ from matplotlib.ticker import MaxNLocator
 from deterred import fig_to_b64
 
 import pandas as pd
+import numpy as np
 
 import json
 
@@ -417,6 +467,7 @@ data = json.loads(input())
 df_artists = pd.DataFrame(data['artists-discovered']['data'])
 df_albums = pd.DataFrame(data['albums-discovered']['data'])
 df_new = pd.DataFrame(data['new-albums-listened']['data'])
+df_age = pd.DataFrame(data['average-album-age-per-month']['data'])
 
 images = []
 
@@ -435,6 +486,17 @@ df_new.plot(ax=ax, kind='bar', x='year', stacked=True)
 ax.set_title('Hours listened to new vs. old albums')
 images.append(fig_to_b64(fig))
 
+fig, ax = plt.subplots(figsize=(8, 5))
+ax.set_title('Average album age (in months) per month')
+x = np.arange(len(df_age))
+y = df_age.age
+z = np.polyfit(x, y, 1)
+p = np.poly1d(z)
+ax.plot(x, p(x), '--', color='red', linewidth=1, label='trend')
+df_age.plot(ax=ax, kind='line', x='month', y='age', legend=False)
+ax.legend()
+images.append(fig_to_b64(fig))
+
 print(json.dumps(images))"
    :input data
    :on-success
@@ -447,6 +509,9 @@ print(json.dumps(images))"
      (insert "\n")
      (insert (deterred-format (f-h3 "Hours listened to new vs. old albums") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 2))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Average album age per month") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 3))
      (insert "\n")))
 
   (insert
