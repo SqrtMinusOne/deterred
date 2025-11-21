@@ -76,6 +76,210 @@ I set this to \"Emacs\" because this usually means EXWM for me."
   :group 'deterred-sources
   :type '(repeat string))
 
+(defcustom deterred-activitywatch-app-map
+  '(;; Firefox variants
+    ("firefox" . "Firefox")
+    ("firefox-default" . "Firefox")
+    ("floorp" . "Firefox")
+    ;; Chromium/Chrome variants
+    ("Chromium-browser" . "Chromium")
+    ("Google-chrome" . "Chrome")
+    ("Google-chrome-stable" . "Chrome")
+    ;; Edge variants
+    ("Msedge" . "Microsoft Edge")
+    ("Microsoft-edge" . "Microsoft Edge")
+    ;; Brave variants
+    ("Brave-browser" . "Brave")
+    ;; Vivaldi variants
+    ("Vivaldi-stable" . "Vivaldi")
+    ;; Yandex variants
+    ("Yandex-browser" . "Yandex")
+    ;; Communication apps
+    ("discord" . "Discord")
+    ("TelegramDesktop" . "Telegram")
+    ("Telegram-desktop" . "Telegram")
+    (".telegram-desktop-real" . "Telegram")
+    ("Skypeforlinux" . "Skype")
+    ("VK" . "VK Messenger")
+    ("Vk" . "VK Messenger")
+    ("Vk-messenger" . "VK Messenger")
+    ("Rocket.Chat" . "Rocket.Chat")
+    ("Rocketchat-desktop" . "Rocket.Chat")
+    ;; LibreOffice variants
+    ("Soffice" . "LibreOffice")
+    ("libreoffice-startcenter" . "LibreOffice")
+    ;; PDF Viewers
+    ("FoxitReader.enu.setup.2.4.4.0911(r057d814).x64.run" . "Foxit Reader")
+    ;; GIMP variants
+    ("Gimp-2.10" . "GIMP")
+    ("Gimp-2.8" . "GIMP")
+    ("Gimp" . "GIMP")
+    ;; Inkscape variants
+    (".inkscape-real" . "Inkscape")
+    ;; Media Players
+    ("Google Play Music Desktop Player" . "Google Play Music")
+    ("google-musicmanager" . "Google Play Music")
+    ;; Development tools
+    ("Dbeaver" . "DBeaver")
+    ("_Postman" . "Postman")
+    ("Drawio" . "Draw.io")
+    ("draw.io" . "Draw.io")
+    ;; Virtualization
+    ("VirtualBoxVM" . "VirtualBox")
+    ("VirtualBox Manager" . "VirtualBox")
+    ("VirtualBox Machine" . "VirtualBox")
+    (".virt-manager-real" . "virt-manager")
+    ("..virt-manager-real-real" . "virt-manager")
+    ("Genymotion Player" . "Genymotion")
+    ;; Wine variants
+    ("wineboot.exe" . "Wine")
+    ("winedbg.exe" . "Wine")
+    ("wineconsole.exe" . "Wine")
+    ("winhlp32.exe" . "Wine")
+    ("notepad.exe" . "Wine Notepad")
+    ("clipswin.exe" . "Wine")
+    ("control.exe" . "Wine Control Panel")
+    ;; Obsidian variants
+    ("obsidian" . "Obsidian")
+    ;; Electron variants (generic app wrapper)
+    ("Electron7" . "Electron")
+    ;; Blueman variants
+    (".blueman-applet-real" . "Blueman")
+    ("Blueman-applet" . "Blueman")
+    ("Blueman-adapters" . "Blueman")
+    ("Blueman-sendto" . "Blueman")
+    ("Blueman-manager" . "Blueman")
+    ;; BalenaEtcher variants
+    ("Balena-etcher" . "balenaEtcher")
+    ;; Font viewers
+    ("gnome-font-viewer" . "Gnome-font-viewer")
+    ;; AutoKey variants
+    (".autokey-gtk-real" . "AutoKey")
+    (".autokey-qt-real" . "AutoKey")
+    ;; ScreenKey variants
+    (".screenkey-real" . "ScreenKey")
+    ;; Outline variants
+    ("Outline-client" . "Outline")
+    ;; Python system tools
+    ("Blueberry.py" . "Blueberry")
+    ("Cinnamon-settings.py" . "Cinnamon Settings")
+    ("cinnamon-settings sound" . "Cinnamon Settings")
+    ("cinnamon-settings network" . "Cinnamon Settings")
+    ("System-config-printer.py" . "System Config Printer")
+    ("MintSources.py" . "Mint Sources")
+    ("MintUpdate.py" . "Mint Update")
+    ("Mintinstall.py" . "Mint Install")
+    ("Mintstick.py" . "Mint Stick")
+    ;; PolicyKit
+    ("Polkit-gnome-authentication-agent-1" . "PolicyKit")
+    ;; Matplotlib variants
+    ("matplotlib" . "Matplotlib")
+    ;; FreeFileSync variants
+    ("FreeFileSync_x86_64" . "FreeFileSync")
+    ;; VeraCrypt variants
+    ("Veracrypt" . "VeraCrypt")
+    ;; Starsector variants
+    ("Starsector 0.95a-RC15" . "Starsector")
+    ;; JetBrains variants
+    ("jetbrains-datagrip" . "JetBrains DataGrip")
+    ("jetbrains-idea-ce" . "JetBrains IDEA")
+    ("jetbrains-studio" . "JetBrains Studio")
+    ("jetbrains-toolbox" . "JetBrains Toolbox")
+    ;; Zen browser
+    ("zen-alpha" . "Zen Browser"))
+  "Mapping of app names to canonical names.
+
+This is an alist where keys are variant names and values are the
+canonical names that should be used in the database."
+  :group 'deterred-sources
+  :type '(alist :key-type string :value-type string))
+
+(defun deterred-activitywatch--normalize-app-name (app)
+  "Normalize APP name using `deterred-activitywatch-app-map'."
+  (or (alist-get app deterred-activitywatch-app-map nil nil #'equal)
+      app))
+
+(defun deterred-activitywatch-merge-apps ()
+  "Merge app variants in activitywatch_currentwindow_agg table.
+
+This function uses `deterred-activitywatch-app-map' to consolidate
+different names of the same application into a canonical name.
+
+The merge process:
+1. Fetch all records for apps mentioned in the map (both variants and
+   canonical names)
+2. Delete those records from the database
+3. Merge records by (day, hostname, canonical_app)
+4. Insert merged records back"
+  (interactive)
+  (let* ((db (deterred-db--init))
+         (apps-to-fetch (delete-dups
+                         (append (mapcar #'car deterred-activitywatch-app-map)
+                                 (mapcar #'cdr deterred-activitywatch-app-map))))
+         (total-fetched 0)
+         (total-merged 0)
+         merged-records)
+    (message "Fetching records for %d apps..." (length apps-to-fetch))
+
+    ;; Fetch all records for apps in the map
+    (let ((all-records
+           (deterred-db-select-alist
+            db
+            (format "SELECT day, hostname, app, total_duration
+                     FROM activitywatch_currentwindow_agg
+                     WHERE app IN (%s)"
+                    (mapconcat (lambda (app) (format "'%s'" (string-replace "'" "''" app)))
+                               apps-to-fetch ", ")))))
+      (setq total-fetched (length all-records))
+      (message "Fetched %d records" total-fetched)
+
+      (when all-records
+        (with-sqlite-transaction db
+          ;; Delete all fetched records
+          (sqlite-execute
+           db
+           (format "DELETE FROM activitywatch_currentwindow_agg WHERE app IN (%s)"
+                   (mapconcat (lambda (app) (format "'%s'" (string-replace "'" "''" app)))
+                              apps-to-fetch ", ")))
+
+          ;; Merge records
+          (let ((groups (make-hash-table :test 'equal)))
+            (dolist (record all-records)
+              (let* ((day (alist-get 'day record))
+                     (hostname (alist-get 'hostname record))
+                     (app (alist-get 'app record))
+                     (duration (alist-get 'total_duration record))
+                     (canonical-app (deterred-activitywatch--normalize-app-name app))
+                     (key (list day hostname canonical-app)))
+                (puthash key
+                         (+ duration (gethash key groups 0))
+                         groups)))
+
+            (maphash
+             (lambda (key total-duration)
+               (push `((day . ,(nth 0 key))
+                       (hostname . ,(nth 1 key))
+                       (app . ,(nth 2 key))
+                       (total_duration . ,total-duration))
+                     merged-records))
+             groups))
+
+          (setq total-merged (length merged-records))
+          (message "Merged into %d unique records" total-merged)
+
+          ;; Insert merged records back
+          (when merged-records
+            (deterred-db-insert-unsafe
+             db
+             :table-name 'activitywatch_currentwindow_agg
+             :values merged-records
+             :conflict-action 'do-update
+             :conflict-attrs '(day hostname app))
+            (deterred-db-mark-updated db 'activitywatch_currentwindow_agg)))))
+
+    (message "App merge complete: %d records fetched, merged into %d records"
+             total-fetched total-merged)))
+
 (defun deterred-activitywatch--bucket-store-afk (events hostname)
   "Store AFK EVENTS for HOSTNAME in DETERRED.
 
@@ -119,7 +323,8 @@ loading logic might depend on the AFK bucket."
          (start (caar
                  (sqlite-select
                   db "SELECT MAX(notafk_end_timestamp)
-                      FROM activitywatch_notafk_period"))))
+                      FROM activitywatch_notafk_period
+                      WHERE hostname = ?" (list hostname)))))
     (request (concat deterred-activitywatch-api "/0/buckets/" bucket-id "/events")
       :parser 'json-read
       :params (when start
@@ -303,7 +508,7 @@ returned by the ActivityWatch API."
                   using (hash-values duration)
                   collect `((hostname . ,hostname)
                             (day . ,(format-time-string "%F" (encode-time day)))
-                            (app . ,app)
+                            (app . ,(deterred-activitywatch--normalize-app-name app))
                             (total_duration . ,duration)))))
     (when data
       (with-sqlite-transaction db
@@ -433,13 +638,14 @@ Existing records are not overwritten."
         (data (deterred-utils-csv-to-alist file))
         (aggregated (make-hash-table :test #'equal))
         values)
-    ;; Aggregate data by (hostname, date, app)
+    ;; Aggregate data by (hostname, date, canonical_app)
     (dolist (row data)
       (let* ((hostname (alist-get 'hostname row))
              (day (alist-get 'date row))
              (app (alist-get 'app row))
+             (canonical-app (deterred-activitywatch--normalize-app-name app))
              (total-minutes (string-to-number (alist-get 'total_minutes row)))
-             (key (list hostname day app)))
+             (key (list hostname day canonical-app)))
         ;; Ignore AFK entries
         (unless (equal app "AFK")
           (puthash key

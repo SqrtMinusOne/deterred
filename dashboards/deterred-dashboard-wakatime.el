@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-dashboard)
 (require 'deterred-db)
+(require 'deterred-utils)
 
 (defclass deterred-dashboard-wakatime (deterred-dashboard)
   ((name :initform "WakaTime"))
@@ -85,20 +86,6 @@
     (top-months (name . "Top months"))
     (numbers-data (name . "Numerical data"))))
 
-(defun deterred-dashboard-wakatime--add-fraction (data total &optional key)
-  "Add a fraction column to DATA.
-
-DATA is a list of alists, which has to contain the KEY column, which
-is \"hours\" by default.  TOTAL is the sum of all values."
-  (mapcar (lambda (datum)
-            (append
-             datum
-             (list
-              (cons 'fraction
-                    (format "%.2f%%"
-                            (* 100.0 (/ (alist-get (or key 'hours) datum) total)))))))
-          data))
-
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-wakatime)
                                                  params)
   "Fetch datasets for the WakaTime dashboard.
@@ -137,7 +124,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
            params))
          (total-hours (alist-get 'total_hours (car numbers-data))))
     `((top-languages
-       . ,(deterred-dashboard-wakatime--add-fraction
+       . ,(deterred-utils-add-fraction
            (deterred-db-select-template-alist
             db
             "SELECT
@@ -151,7 +138,7 @@ ORDER BY hours DESC"
             params)
            total-hours))
       (top-operating-systems
-       . ,(deterred-dashboard-wakatime--add-fraction
+       . ,(deterred-utils-add-fraction
            (deterred-db-select-template-alist
             db
             "SELECT
@@ -165,7 +152,7 @@ ORDER BY hours DESC"
             params)
            total-hours))
       (top-projects
-       . ,(deterred-dashboard-wakatime--add-fraction
+       . ,(deterred-utils-add-fraction
            (deterred-db-select-template-alist
             db
             "SELECT
@@ -181,7 +168,7 @@ LIMIT 20"
             params)
            total-hours))
       (top-entities
-       . ,(deterred-dashboard-wakatime--add-fraction
+       . ,(deterred-utils-add-fraction
            (deterred-db-select-template-alist
             db
             "SELECT
@@ -198,7 +185,7 @@ LIMIT 100"
             params)
            total-hours))
       (top-editors
-       . ,(deterred-dashboard-wakatime--add-fraction
+       . ,(deterred-utils-add-fraction
            (deterred-db-select-template-alist
             db
             "SELECT

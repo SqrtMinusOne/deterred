@@ -204,5 +204,19 @@ VARS is a list of symbols."
          `(cons ',var ,var))
        vars)))
 
+(defun deterred-utils-add-fraction (data total &optional key)
+  "Add a fraction column to DATA.
+
+DATA is a list of alists, which has to contain the KEY column, which
+is \"hours\" by default.  TOTAL is the sum of all values."
+  (mapcar (lambda (datum)
+            (append
+             datum
+             (list
+              (cons 'fraction
+                    (format "%.2f%%"
+                            (* 100.0 (/ (alist-get (or key 'hours) datum) total)))))))
+          data))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

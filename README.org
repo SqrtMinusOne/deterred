@@ -105,7 +105,7 @@ Dashboards:
 - [X] MPD
 - [X] Podcasts
 - [X] WakaTime
-- [ ] ActivityWatch
+- [X] ActivityWatch
 - [ ] Photos
 - [ ] Read it Later
 - [ ] Org Journal
@@ -124,8 +124,8 @@ MPD:
 - [X] fix missing records before 2025-03-29
 
 ActivityWatch:
-- [ ] Load from CSV for the old =sqrt-data=
-- [ ] Load for the database.
+- [X] Load from CSV for the old =sqrt-data=
+- [X] Load for the database.
 
 Messengers:
 - [ ] Load VK dump
