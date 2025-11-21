@@ -31,12 +31,17 @@
 ;; detailed timestamps will increaase the database size too much.
 ;;
 ;; `deterred-activitywatch-load' starts the loading flow from API.
+;;
+;; CSV import from old sqrt-data project is available via:
+;; - `deterred-activitywatch-import-afkstatus-csv' for afkstatus data
+;; - `deterred-activitywatch-import-notafk-window-csv' for notafk_window data
 
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-locations)
 (require 'deterred-source)
 (require 'deterred-format)
+(require 'deterred-utils)
 (require 'request)
 (require 'org-duration)
 (require 'cl-lib)
@@ -339,6 +344,118 @@ convinience).  Used internally for recursion."
           :error #'deterred-utils-on-request-error))
     (when callback (funcall callback))))
 
+(defun deterred-activitywatch-import-afkstatus-csv (file)
+  "Import afkstatus data from CSV FILE into DETERRED.
+
+FILE should be a CSV file with the following columns:
+- id: unique identifier (ignored)
+- hostname: the hostname
+- timestamp: timestamp in YYYY-MM-DD HH:mm:dd.sss format (local time)
+- duration: duration in seconds
+- status: \\\"true\\\" (not afk) or \\\"false\\\" (afk)
+
+The timestamp is in local time and will be converted to UTC using
+location data from `deterred-locations-offset-at'.
+
+Only rows with status=true are imported into activitywatch_notafk_period
+table with columns (hostname, notafk_start_timestamp, notafk_end_timestamp).
+Existing records are not overwritten."
+  (interactive
+   (list
+    (read-file-name "Afkstatus CSV file: " nil nil nil nil
+                    (lambda (f)
+                      (or (file-directory-p f)
+                          (string-match-p (rx ".csv" eos) f))))))
+  (let ((db (deterred-db--init))
+        (data (deterred-utils-csv-to-alist file))
+        values)
+    (dolist (row data)
+      (when (equal (alist-get 'status row) "true")
+        (let* ((hostname (alist-get 'hostname row))
+               (timestamp-str (alist-get 'timestamp row))
+               (duration (string-to-number (alist-get 'duration row)))
+               ;; Parse timestamp and treat as UTC to get an approximate time
+               (parsed-time (parse-time-string timestamp-str))
+               (approx-timestamp (time-convert (encode-time parsed-time) 'integer))
+               ;; Get the timezone offset at that approximate time
+               (offset (deterred-locations-offset-at approx-timestamp hostname db))
+               ;; Subtract offset to convert from local time to UTC
+               (start-timestamp (- approx-timestamp offset))
+               (end-timestamp (+ start-timestamp (round duration))))
+          (push `((hostname . ,hostname)
+                  (notafk_start_timestamp . ,start-timestamp)
+                  (notafk_end_timestamp . ,end-timestamp))
+                values))))
+    (when values
+      (with-sqlite-transaction db
+        (deterred-db-insert-unsafe
+         db :table-name 'activitywatch_notafk_period
+         :values values
+         :conflict-action 'do-nothing
+         :conflict-attrs '(hostname notafk_start_timestamp notafk_end_timestamp))
+        (deterred-db-mark-updated db 'activitywatch_notafk_period)))
+    (message "Imported %d not-AFK periods from %s" (length values) file)))
+
+(defun deterred-activitywatch-import-notafk-window-csv (file)
+  "Import notafk_window data from CSV FILE into DETERRED.
+
+FILE should be a CSV file with the following columns:
+- hostname: the hostname
+- date: date in YYYY-MM-DD format
+- total_minutes: total minutes spent (in minutes, not seconds)
+- app: application name
+- title: window title (ignored)
+
+Rows where app is \"AFK\" are ignored.  The data is grouped by hostname,
+date, and app, summing total_minutes across all titles.  The aggregated
+data is then imported into activitywatch_currentwindow_agg table with
+columns \(hostname, day, app, total_duration\), where total_duration is
+converted from minutes to seconds.
+
+Existing records are not overwritten."
+  (interactive
+   (list
+    (read-file-name "Notafk window CSV file: " nil nil nil nil
+                    (lambda (f)
+                      (or (file-directory-p f)
+                          (string-match-p (rx ".csv" eos) f))))))
+  (let ((db (deterred-db--init))
+        (data (deterred-utils-csv-to-alist file))
+        (aggregated (make-hash-table :test #'equal))
+        values)
+    ;; Aggregate data by (hostname, date, app)
+    (dolist (row data)
+      (let* ((hostname (alist-get 'hostname row))
+             (day (alist-get 'date row))
+             (app (alist-get 'app row))
+             (total-minutes (string-to-number (alist-get 'total_minutes row)))
+             (key (list hostname day app)))
+        ;; Ignore AFK entries
+        (unless (equal app "AFK")
+          (puthash key
+                   (+ total-minutes (gethash key aggregated 0))
+                   aggregated))))
+    ;; Convert aggregated data to values list
+    (maphash
+     (lambda (key total-minutes)
+       (push `((hostname . ,(nth 0 key))
+               (day . ,(nth 1 key))
+               (app . ,(nth 2 key))
+               (total_duration . ,(round (* total-minutes 60))))
+             values))
+     aggregated)
+    (when values
+      (with-sqlite-transaction db
+        (deterred-db-insert-unsafe
+         db
+         :table-name 'activitywatch_currentwindow_agg
+         :values values
+         :conflict-action 'do-nothing
+         :conflict-attrs '(day hostname app))
+        (deterred-db-mark-updated db 'activitywatch_currentwindow_agg)))
+    (message "Imported %d currentwindow records from %s (aggregated from %d rows)"
+             (length values) file (length data))))
+
 (defun deterred-activitywatch-load (&optional callback)
   "Load data from ActivityWatch API into DETERRED.
 
@@ -385,6 +502,15 @@ If CALLBACK is non-nil, call it when the sync is done."
   ((name :initform "ActivityWatch")
    (warn-days :initform 1))
   "DETERRED source for ActivityWatch")
+
+(cl-defmethod deterred-source-actions ((_source deterred-activitywatch) &optional callback)
+  "Run an action for the ActivityWatch source.
+
+Run CALLBACK when done."
+  (deterred-source--actions-pick
+   '(("Import afkstatus CSV" deterred-activitywatch-import-afkstatus-csv nil)
+     ("Import notafk_window CSV" deterred-activitywatch-import-notafk-window-csv nil))
+   callback))
 
 (cl-defmethod deterred-source-sync ((source deterred-activitywatch) &optional callback)
   "Sync DETERRED with ActivityWatch.

@@ -46,7 +46,7 @@ This works better than `pcsv' for Reddit dump."
   (json-parse-string
    (shell-command-to-string
     (format "cat %s | python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin)]))'"
-            (shell-quote-argument file)))
+            (shell-quote-argument (expand-file-name file))))
    :object-type 'alist))
 
 (defun deterred-utils-ts-to-day-start (&optional timestamp)
