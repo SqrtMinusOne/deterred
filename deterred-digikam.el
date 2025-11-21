@@ -120,6 +120,44 @@ is the sqlite database object."
      db
      '(digikam_album digikam_photo))))
 
+(defun deterred-digikam-infer-locations (&optional db)
+  "Infer locations for digikam photos using timestamp data.
+
+DB is the sqlite database object.
+
+This function:
+- Infers location_id for photos whose album doesn't have a location
+- Clears location_id for photos whose album has a location (album
+  takes precedence)
+
+Uses `deterred-locations-locate-at' to determine location from timestamp."
+  (interactive)
+  (let ((db (or db (deterred-db--init))))
+    (with-sqlite-transaction db
+      ;; Clear locations for photos in albums that have a location
+      (sqlite-execute db "UPDATE digikam_photo
+                          SET location_id = NULL
+                          WHERE album_id IN (SELECT id FROM digikam_album WHERE location_id IS NOT NULL)")
+
+      ;; Infer locations for photos in albums without a location
+      (let ((photos (deterred-db-select-alist
+                     db "SELECT p.*
+                         FROM digikam_photo p
+                         INNER JOIN digikam_album a ON p.album_id = a.id
+                         WHERE a.location_id IS NULL")))
+        (message "Inferring locations for %d photos..." (length photos))
+        (dolist (photo photos)
+          (let* ((timestamp (alist-get 'timestamp photo))
+                 (location (deterred-locations-locate-at db timestamp)))
+            (setf (alist-get 'location_id photo) (alist-get 'id location))))
+        (deterred-db-insert-unsafe
+         db
+         :table-name 'digikam_photo
+         :values photos
+         :conflict-attrs '(id)
+         :conflict-action 'do-update)
+        (message "Location inference complete")))))
+
 (defun deterred-digikam-load (file)
   "Load digiKam database into DERERRED.
 
@@ -133,7 +171,8 @@ I think."
     (sqlite-pragma digikam-db "foreign_keys = ON")
     (let ((data (deterred-digikam--get-data db digikam-db)))
       (deterred-digikam-store
-       db (nth 0 data) (nth 1 data)))))
+       db (nth 0 data) (nth 1 data))
+      (deterred-digikam-infer-locations db))))
 
 (defclass deterred-digikam (deterred-source)
   ((name :initform "Photos (digikam)")

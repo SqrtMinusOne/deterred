@@ -89,31 +89,37 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 
 * Plans
 Interfaces:
-- [ ] MPD songs without lang?
-- [ ] Location edit UI?
-- [ ] Location check UI via digiKam
 - [ ] Generalize daily summary to range summary where possible (e.g. weekly summary)
 - [ ] Event list per day
+
+Edit UI for:
+- [ ] Location edit UI
+- [ ] Location check UI via digiKam
+- [ ] Album location edit UI
+- [ ] MPD song language edit UI
+- [ ] Read It Later host language edit UI
+- [ ] Hostname category edit UI
 
 Meta:
 - [ ] Add datasets. They'll only load data but not integrate with the dispatcher.
 - [ ] Common dialog for SQL errors
 - [X] Common dialog for request errors
 - [X] Extract faces?
+- [ ] Maybe not throw an error if there isn't a location.
 
 Dashboards:
 - [X] MPD
 - [X] Podcasts
 - [X] WakaTime
 - [X] ActivityWatch
-- [ ] Photos
-- [ ] Read it Later
+- [X] Read it Later
+- [X] Photos
 - [ ] Org Journal
 - [ ] Messengers
 - [ ] Social: VK, Reddit, Mastodon, Discord, Manifold
 
 Read it Later:
-- [ ] Source language UI?
+- [X] Source language UI?
 
 Datasets:
 - Parse Twitter http://web.archive.org/web/20230103104809/https://twitter.com/sqrtminustwo
@@ -126,6 +132,7 @@ MPD:
 ActivityWatch:
 - [X] Load from CSV for the old =sqrt-data=
 - [X] Load for the database.
+- [ ] Extract hostnames into a category (laptop/desktop)
 
 Messengers:
 - [ ] Load VK dump

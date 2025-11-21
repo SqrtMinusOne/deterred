@@ -93,6 +93,7 @@ DST-MODE is either \"EU\", \"RU\", or nil."
 TIMESTAMP is a UNIX timestamp.  DB is the sqlite database object.
 
 The return value is an alist with the following keys:
+- id
 - name
 - lat
 - lon
@@ -101,14 +102,14 @@ The return value is an alist with the following keys:
 
 \"timezone\" is adjusted for DST."
   (let ((raw-data (car (sqlite-select
-                        db "SELECT name, latitude, longitude, timezone, dst_mode FROM location l
+                        db "SELECT l.id, name, latitude, longitude, timezone, dst_mode FROM location l
                    INNER JOIN location_times lt ON l.id = lt.location_id
                    WHERE lt.timestamp <= ?
                    ORDER BY lt.timestamp DESC LIMIT 1"
                         (list timestamp)))))
     (unless raw-data
       (error "No location data found for timestamp %s" timestamp))
-    (let* ((data (deterred-db-list-to-alist raw-data '(name lat lon timezone dst-mode)))
+    (let* ((data (deterred-db-list-to-alist raw-data '(id name lat lon timezone dst-mode)))
            (dst-hours (deterred-locations--dst-offset-hours
                        timestamp (alist-get 'dst-mode data))))
       (setf (alist-get 'timezone data)
