@@ -276,13 +276,15 @@ PARAMS is the parameters, DATA is data as returned by
     (require 'deterred-dashboard-podcasts)
     (require 'deterred-dashboard-wakatime)
     (require 'deterred-dashboard-activitywatch)
+    (require 'deterred-dashboard-read-it-later)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
                 (deterred-dashboard-mpd)
                 (deterred-dashboard-podcasts)
                 (deterred-dashboard-wakatime)
-                (deterred-dashboard-activitywatch)))))
+                (deterred-dashboard-activitywatch)
+                (deterred-dashboard-read-it-later)))))
 
 (defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.

@@ -215,7 +215,8 @@ is \"hours\" by default.  TOTAL is the sum of all values."
              (list
               (cons 'fraction
                     (format "%.2f%%"
-                            (* 100.0 (/ (alist-get (or key 'hours) datum) total)))))))
+                            (* 100.0 (/ (float (alist-get (or key 'hours) datum))
+                                        total)))))))
           data))
 
 (provide 'deterred-utils)

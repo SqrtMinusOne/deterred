@@ -91,7 +91,11 @@ Has to have the \"Bookmarks: Read Only\" role."
   "List all read articles from Readeck.
 
 Call CALLBACK with the results.  PAGE and RESULTS are the recursive
-parameters."
+parameters.  START-TIMESTAMP is the optional start timestamp for
+incremental sync.
+
+The results are a list of alists suitable for
+`deterred-read-it-later--store', which see for the structure."
   (unless page
     (setq page 0))
   (request (concat deterred-read-it-later-readeck-url
@@ -172,7 +176,10 @@ Call CALLBACK with the access token."
   "List all read articles from Wallabag.
 
 Call CALLBACK with the results.  PAGE and RESULTS are the recursive
-parameters; TOKEN is retrieved on the first pass."
+parameters; TOKEN is retrieved on the first pass.
+
+The results are a list of alists suitable for
+`deterred-read-it-later--store', which see for the structure."
   (if (not token)
       (deterred-read-it-later--wallabag-authorize
        (lambda (token)
@@ -228,9 +235,32 @@ parameters; TOKEN is retrieved on the first pass."
 (defun deterred-read-it-later--store (results)
   "Store RESULTS in the database.
 
-TODO document RESULTS."
+RESULTS should be a list of alists with the following keys:
+- id: unique article identifier (UUID)
+- href: link to the article in the read-it-later app
+- url: original article URL
+- title: article title
+- host: hostname extracted from the URL
+- created_at: article creation timestamp (UNIX epoch)
+- read_at: article read timestamp (UNIX epoch)
+- provider: read-it-later provider name (e.g., \"readeck\", \"wallabag\")
+
+This function first inserts unique hosts into read_it_later_host table
+\(with language as NULL\), then inserts the articles into
+read_it_later_article table."
   (let ((db (deterred-db--init)))
     (with-sqlite-transaction db
+      ;; First, insert unique hosts into read_it_later_host table
+      (let ((hosts (seq-uniq (mapcar (lambda (result)
+                                       `((host . ,(alist-get 'host result))
+                                         (language . nil)))
+                                     results))))
+        (deterred-db-insert-unsafe
+         db
+         :table-name 'read_it_later_host
+         :values hosts
+         :conflict-action 'do-nothing))
+      ;; Then insert articles
       (deterred-db-insert-unsafe
        db
        :table-name 'read_it_later_article
