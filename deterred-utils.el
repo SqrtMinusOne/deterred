@@ -219,5 +219,14 @@ is \"hours\" by default.  TOTAL is the sum of all values."
                                         total)))))))
           data))
 
+(defun deterred-utils-merge-hashes (target source)
+  "Merge hash table SOURCE into TARGET.
+
+TARGET and SOURCE are hash tables.  All key-value pairs from SOURCE
+are added to TARGET, overwriting existing keys if present."
+  (maphash (lambda (k v)
+             (puthash k v target))
+           source))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here
