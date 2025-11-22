@@ -30,6 +30,7 @@
 
 ;;; Code:
 (require 'org)
+(require 'deterred-format)
 (require 'vtable)
 
 (define-derived-mode deterred-grid-mode special-mode "DETERRED Grid"
@@ -87,50 +88,52 @@ column names.
 If MAX-ROWS is passed, truncate the table row count.  If
 MAX-COLUMN-WIDTH is passed, truncate the column names with
 `truncate-string-to-width'."
-  (let ((columns (mapcar #'car (car data))))
-    (with-temp-buffer
-      (let (org-mode-hook)
-        (org-mode))
-      (insert "| "
-              (mapconcat
-               (lambda (col)
-                 (let ((name (or (alist-get col column-names)
-                                 (symbol-name col))))
-                   (when max-column-width
-                     (setq name (truncate-string-to-width name max-column-width
-                                                          nil nil t)))
-                   name))
-               columns " | ")
-              " |\n")
-      (insert "|--\n")
-      (mapc (lambda (datum)
-              (insert "| "
-                      (mapconcat
-                       (lambda (col)
-                         (let* ((item (alist-get col datum))
-                                (value (deterred-grid--org-table-escape
-                                        (cond
-                                         ((numberp item) (number-to-string item))
-                                         ((stringp item) item)
-                                         (t (prin1-to-string item))))))
-                           (when max-column-width
-                             (setq value
-                                   (truncate-string-to-width value max-column-width
-                                                             nil nil t)))
-                           value))
-                       columns
-                       " | ")
-                      " |\n"))
-            (if max-rows (take max-rows data) data))
-      (goto-char (point-min))
-      (org-table-align)
-      (goto-char (point-max))
-      (when grid-button
-        (insert (deterred-format
-                 (f-button "[View table]"
-                           (lambda (&rest _)
-                             (deterred-grid-show data))))))
-      (string-trim (buffer-string)))))
+  (if (null data)
+      (deterred-format (f-ace "(no data)" 'deterred-faces-info) "\n")
+    (let ((columns (mapcar #'car (car data))))
+      (with-temp-buffer
+        (let (org-mode-hook)
+          (org-mode))
+        (insert "| "
+                (mapconcat
+                 (lambda (col)
+                   (let ((name (or (alist-get col column-names)
+                                   (symbol-name col))))
+                     (when max-column-width
+                       (setq name (truncate-string-to-width name max-column-width
+                                                            nil nil t)))
+                     name))
+                 columns " | ")
+                " |\n")
+        (insert "|--\n")
+        (mapc (lambda (datum)
+                (insert "| "
+                        (mapconcat
+                         (lambda (col)
+                           (let* ((item (alist-get col datum))
+                                  (value (deterred-grid--org-table-escape
+                                          (cond
+                                           ((numberp item) (number-to-string item))
+                                           ((stringp item) item)
+                                           (t (prin1-to-string item))))))
+                             (when max-column-width
+                               (setq value
+                                     (truncate-string-to-width value max-column-width
+                                                               nil nil t)))
+                             value))
+                         columns
+                         " | ")
+                        " |\n"))
+              (if max-rows (take max-rows data) data))
+        (goto-char (point-min))
+        (org-table-align)
+        (goto-char (point-max))
+        (when grid-button
+          (insert (deterred-format
+                   (f-button "[View table]"
+                             (lambda (&rest _)
+                               (deterred-grid-show data))))))
+        (string-trim (buffer-string))))))
 
 (provide 'deterred-grid)
 ;;; deterred-grid.el ends here

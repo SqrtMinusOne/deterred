@@ -171,9 +171,9 @@ Data has be a list of alists to work correctly."
         (datasets (deterred-dashboard-fetch-datasets dashboard params)))
     (cl-loop for (name . params) in schema
              for dataset = (alist-get name datasets)
-             unless dataset
-             do (error "Dashboard \"%s\" hasn't returned dataset \"%s\""
-                       (oref dashboard name) name)
+             ;; unless dataset
+             ;; do (error "Dashboard \"%s\" hasn't returned dataset \"%s\""
+             ;;           (oref dashboard name) name)
              collect (cons name
                            (append params
                                    (list (cons 'data dataset)))))))
@@ -278,6 +278,7 @@ PARAMS is the parameters, DATA is data as returned by
     (require 'deterred-dashboard-activitywatch)
     (require 'deterred-dashboard-read-it-later)
     (require 'deterred-dashboard-digikam)
+    (require 'deterred-dashboard-messengers)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
@@ -286,7 +287,8 @@ PARAMS is the parameters, DATA is data as returned by
                 (deterred-dashboard-wakatime)
                 (deterred-dashboard-activitywatch)
                 (deterred-dashboard-read-it-later)
-                (deterred-dashboard-digikam)))))
+                (deterred-dashboard-digikam)
+                (deterred-dashboard-messengers)))))
 
 (defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.
