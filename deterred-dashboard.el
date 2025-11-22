@@ -279,6 +279,7 @@ PARAMS is the parameters, DATA is data as returned by
     (require 'deterred-dashboard-read-it-later)
     (require 'deterred-dashboard-digikam)
     (require 'deterred-dashboard-messengers)
+    (require 'deterred-dashboard-org-journal-tags)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
@@ -288,7 +289,8 @@ PARAMS is the parameters, DATA is data as returned by
                 (deterred-dashboard-activitywatch)
                 (deterred-dashboard-read-it-later)
                 (deterred-dashboard-digikam)
-                (deterred-dashboard-messengers)))))
+                (deterred-dashboard-messengers)
+                (deterred-dashboard-org-journal-tags)))))
 
 (defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.

@@ -34,7 +34,7 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 
 (setq deterred-backups-location "/home/pavel/10-19 Code/13 Other Projects/13.02 sqrt-data/13.02.B Backups/13.02.B.01 deterred/")
 (setq deterred-dashboard-python "/home/pavel/micromamba/envs/deterred/bin/python")
-(setq deterred-messengers-my-id "30aeaf45-cfc7-3e69-bbdf-35eb8666d29e")
+(setq deterred-messengers-my-id "098236bb-5fc5-4a04-8b6d-477afa5105fa")
 (setq deterred-digikam-folder "~/30-39 Life/35 Photos/")
 (setq deterred-wakatime-api-key (my/password-store-get "My_Online/APIs/wakatime"))
 (setq deterred-wakatime-project-name-map
@@ -114,9 +114,9 @@ Dashboards:
 - [X] ActivityWatch
 - [X] Read it Later
 - [X] Photos
-- [ ] Org Journal
-- [ ] Messengers
-- [ ] Social: VK, Reddit, Mastodon, Discord, Manifold
+- [X] Org Journal
+- [X] Messengers
+- [ ] Social: VK posts, Reddit, Mastodon, Discord, Manifold
 
 Read it Later:
 - [X] Source language UI?
@@ -135,7 +135,7 @@ ActivityWatch:
 - [ ] Extract hostnames into a category (laptop/desktop)
 
 Messengers:
-- [ ] Load VK dump
+- [X] Load VK dump
 
 WakaTime:
 - [X] Integrate with dired
