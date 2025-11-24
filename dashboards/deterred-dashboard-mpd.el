@@ -314,8 +314,8 @@ SELECT
   sum(ms.duration) * 100 / (60 * 60) / 100.0 total
 FROM mpd_song_listened msl
 INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
-INNER JOIN top_artists ta ON ta.album_artist = ms.album_artist
-WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
+WHERE ms.album_artist IN (SELECT album_artist FROM top_artists)
+  [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
 GROUP BY strftime('%Y-%m', msl.timestamp, 'unixepoch'), ms.album_artist"
            params))
       (average-album-age-per-month

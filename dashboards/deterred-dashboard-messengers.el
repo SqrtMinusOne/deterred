@@ -329,8 +329,7 @@ SELECT
   sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
-INNER JOIN top_chats tc ON tc.name = mc.name
-WHERE 1 = 1
+WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
   [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mm.messenger IN :messenger]]

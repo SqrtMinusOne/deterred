@@ -220,8 +220,8 @@ SELECT
 FROM org_journal_record_tag
 INNER JOIN org_journal_tag ON org_journal_tag.id = org_journal_record_tag.tag_id
 INNER JOIN org_journal_record ON org_journal_record.id = org_journal_record_tag.record_id
-INNER JOIN top_tags tt ON tt.name = org_journal_tag.name
-WHERE 1 = 1 [[AND org_journal_record.timestamp >= :start-date]]
+WHERE org_journal_tag.name IN (SELECT name FROM top_tags)
+  [[AND org_journal_record.timestamp >= :start-date]]
   [[AND org_journal_record.timestamp <= :end-date]]
   [[AND org_journal_tag.name IN :tags]]
 GROUP BY strftime('%Y-%m', org_journal_record.timestamp, 'unixepoch'), org_journal_tag.name
@@ -447,8 +447,7 @@ SELECT
 FROM org_journal_record_tag
 INNER JOIN org_journal_tag ON org_journal_tag.id = org_journal_record_tag.tag_id
 INNER JOIN org_journal_record ON org_journal_record.id = org_journal_record_tag.record_id
-INNER JOIN top_contacts tc ON tc.name = org_journal_tag.name
-WHERE org_journal_tag.name LIKE 'contact.%'
+WHERE org_journal_tag.name IN (SELECT name FROM top_contacts)
   [[AND org_journal_record.timestamp >= :start-date]]
   [[AND org_journal_record.timestamp <= :end-date]]
   [[AND org_journal_record.id IN (

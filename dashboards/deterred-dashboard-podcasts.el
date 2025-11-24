@@ -192,8 +192,9 @@ SELECT
   sum(pl.played_duration) * 100 / (60 * 60) / 100.0 hours
 FROM podcasts_listened pl
 INNER JOIN podcasts_feed pf ON pf.id = pl.feed_id
-INNER JOIN top_podcasts tp ON tp.id = pf.id
-WHERE 1 = 1 [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
+WHERE pf.id in (SELECT tp.id from top_podcasts tp)
+ [[AND pl.timestamp >= :start-date]]
+ [[AND pl.timestamp <= :end-date]]
 GROUP BY strftime('%Y-%m', pl.timestamp, 'unixepoch'), pf.title"
            params))
       (days-waited-to-listen
@@ -217,8 +218,8 @@ SELECT
   CAST(avg(pl.\"timestamp\" - pl.published_timestamp) * 100 / (60 * 60 * 24) AS INTEGER) / 100.0 days_waited_to_listen
 FROM podcasts_listened pl
 INNER JOIN podcasts_feed pf ON pf.id = pl.feed_id
-INNER JOIN top_podcasts tp ON tp.id = pf.id
-WHERE 1 = 1 [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
+WHERE pf.id in (SELECT tp.id from top_podcasts tp)
+ [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
 GROUP BY pf.title
 ORDER BY days_waited_to_listen"
            params)))))
