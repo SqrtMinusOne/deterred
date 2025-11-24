@@ -26,9 +26,10 @@
 ;; Different utility functions for DETERRED.
 
 ;;; Code:
+(require 'deterred-format)
 (require 'pcsv)
 (require 'validate)
-(require 'deterred-format)
+(require 'request)
 
 (defun deterred-utils-csv-to-alist (file)
   "Read a CSV FILE into alist with `pcsv'."
@@ -55,7 +56,7 @@ This works better than `pcsv' for Reddit dump."
     (setf (decoded-time-second time) 0
           (decoded-time-minute time) 0
           (decoded-time-hour time) 0)
-    (time-convert (encode-time time) #'integer)))
+    (time-convert (encode-time time) 'integer)))
 
 (defun deterred-utils-ts-to-day-end (&optional timestamp)
   "Move TIMESTAMP to start of day."
@@ -63,7 +64,7 @@ This works better than `pcsv' for Reddit dump."
     (setf (decoded-time-second time) 59
           (decoded-time-minute time) 59
           (decoded-time-hour time) 23)
-    (time-convert (encode-time time) #'integer)))
+    (time-convert (encode-time time) 'integer)))
 
 (defun deterred-utils-get-this-day (start &optional today)
   "Get TODAY on all years since START.
@@ -83,7 +84,7 @@ and the cdr is the timestamp."
       (setf (decoded-time-year time) (1- (decoded-time-year time)))
       (setq i (1+ i))
       (push (cons (format (if (= i 1) "%s year ago" "%s years ago") i)
-                  (time-convert (encode-time time) #'integer))
+                  (time-convert (encode-time time) 'integer))
             res))
     (nreverse res)))
 

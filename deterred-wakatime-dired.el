@@ -32,9 +32,12 @@
 ;;   dashboard for all projects in the current directory.
 
 ;;; Code:
+(require 'org-duration)
+(require 'dired)
+
 (require 'deterred-db)
 (require 'deterred-wakatime)
-(require 'org-duration)
+(require 'deterred-dashboard-wakatime)
 
 (defvar deterred-wakatime-dired--index nil
   "Index as defined by `deterred-wakatime-dired--index'.")

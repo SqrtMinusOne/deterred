@@ -26,10 +26,12 @@
 ;; TODO
 
 ;;; Code:
-(require 'deterred-db)
-(require 'deterred-source)
 (require 'calendar)
 (require 'cl-lib)
+(require 'org)
+
+(require 'deterred-db)
+(require 'deterred-source)
 
 (defconst deterred-locations-uuid-namespace
   "51038aa1-8fb1-4e05-b697-fa651ba8786d")

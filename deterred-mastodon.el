@@ -26,10 +26,14 @@
 ;; TODO
 
 ;;; Code:
+(require 'cl-lib)
+(require 'magit-section)
+(require 'iso8601)
+(require 'request)
+
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-utils)
-(require 'cl-lib)
 
 (defconst deterred-mastodon-uuid-namespace
   "6c4ea183-e81a-4e9d-bffc-11ed5aacb130")

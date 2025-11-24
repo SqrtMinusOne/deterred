@@ -26,11 +26,13 @@
 ;; TODO
 
 ;;; Code:
+(require 'cl-lib)
+(require 'uuidgen)
+(require 'dom)
+
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-utils)
-(require 'cl-lib)
-(require 'uuidgen)
 
 (defconst deterred-messengers-uuid-namespace
   "d9536b80-3213-4321-b37f-ebf1b558a530")

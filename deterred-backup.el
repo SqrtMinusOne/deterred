@@ -184,7 +184,7 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
     (seq-max (mapcar (lambda (f)
                        (time-convert
                         (nth 5 (file-attributes f))
-                        #'integer))
+                        'integer))
                      source-files))))
 
 (defun deterred-backups-last ()

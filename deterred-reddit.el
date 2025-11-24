@@ -31,6 +31,8 @@
 (require 'deterred-format)
 (require 'deterred-source)
 
+(require 'magit-section)
+
 (defun deterred-reddit-load-dump (folder)
   "Load Reddit dump in FOLDER into DETERRED."
   (interactive
@@ -53,7 +55,7 @@
                                                 (encode-time
                                                  (parse-time-string
                                                   (alist-get 'date comment)))
-                                                #'integer))
+                                                'integer))
                                  (subreddit . ,(alist-get 'subreddit comment))
                                  (body . ,(alist-get 'body comment))))
                              (deterred-utils-csv-to-alist comments-file)))
@@ -65,7 +67,7 @@
                                              (encode-time
                                               (parse-time-string
                                                (alist-get 'date comment)))
-                                             #'integer))
+                                             'integer))
                               (subreddit . ,(alist-get 'subreddit comment))
                               (body . ,(alist-get 'body comment))
                               (title . ,(alist-get 'title comment)) ))

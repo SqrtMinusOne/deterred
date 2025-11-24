@@ -72,7 +72,7 @@ F is the function, which see for the meaning of BDATA."
       (let* ((file (concat music-root (nth 0 datum)))
              (play-count (nth 1 datum))
              (timestamp (nth 2 datum))
-             (last-played (seconds-to-time (time-convert timestamp #'integer)))
+             (last-played (seconds-to-time (time-convert timestamp 'integer)))
              (hash-datum (gethash file emms-cache-db)))
         (when hash-datum
           (setf (alist-get 'last-played (cdr hash-datum))

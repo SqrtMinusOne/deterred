@@ -29,6 +29,7 @@
 (require 'widget)
 (require 'transient)
 (require 'magit-section)
+(require 'org)
 
 (require 'deterred-db)
 (require 'deterred-dashboard)
@@ -115,7 +116,7 @@ No idea what I'm doing wrong, but this seems to help."
                (can-action (deterred-source-actions-p source))
                (warn-days (oref source warn-days))
                (unsynced-days (floor
-                               (/ (float (- (time-convert nil #'integer)
+                               (/ (float (- (time-convert nil 'integer)
                                             (cdr range)))
                                   (* 60 60 24)))))
           (insert
@@ -260,7 +261,7 @@ DATUM is as returned by `deterred-dispatcher--on-this-day-data'."
   "Get summary for one particular day.
 
 TIMESTAMP is a UNIX timestamp."
-  (interactive (list (time-convert (org-read-date nil t) #'integer)))
+  (interactive (list (time-convert (org-read-date nil t) 'integer)))
   (let ((datum (deterred-dispatcher--day-data nil timestamp))
         (buffer-name (format "*DETERRED-<%s>*" (format-time-string "%F" timestamp))))
     (when-let ((buffer (get-buffer buffer-name)))

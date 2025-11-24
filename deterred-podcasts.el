@@ -27,6 +27,8 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-format)
+(require 'uuidgen)
 (require 'cl-lib)
 
 (defconst deterred-podcasts-uuid-namespace

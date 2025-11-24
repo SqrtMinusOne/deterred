@@ -35,6 +35,8 @@
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-utils)
+(require 'request)
+(require 'iso8601)
 (require 'cl-lib)
 (require 'org-duration)
 
@@ -313,7 +315,7 @@ If PROJECT-NAME is non-nil, filter by it."
                   ("end" . ,(format-time-string "%Y-%m-%d"))
                   ("start" . ,(format-time-string
                                "%Y-%m-%d"
-                               (- (time-convert nil #'integer)
+                               (- (time-convert nil 'integer)
                                   (* 60 60 24 deterred-wakatime-api-range)))))))
     (when project-name
       (setf (alist-get "project" params nil nil #'equal)

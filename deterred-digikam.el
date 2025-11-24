@@ -26,11 +26,13 @@
 ;; TODO
 
 ;;; Code:
+(require 'cl-lib)
+(require 'magit-section)
+
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-locations)
 (require 'deterred-format)
-(require 'cl-lib)
 
 (defcustom deterred-digikam-folder nil
   "Gallery root for digiKam."
