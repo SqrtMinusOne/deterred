@@ -102,6 +102,7 @@ The return value is a list of alists with the following keys:
          :values (deterred-habits--parse-buffer)
          :conflict-action 'do-nothing)))))
 
+;;;###autoload
 (defclass deterred-habits (deterred-source)
   ((name :initform "Habits (org-habit)")
    (warn-days :initform 31)

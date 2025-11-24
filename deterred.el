@@ -39,6 +39,7 @@
 (require 'deterred-backup)
 (require 'deterred-grid)
 (require 'deterred-dashboard)
+(require 'deterred-dispatcher)
 
 ;; Datasources
 (require 'deterred-locations)
@@ -68,7 +69,10 @@
   :group 'deterred)
 
 ;;;###autoload
-(defalias 'deterred 'deterred-dispatcher)
+(defun deterred ()
+  "Open DETERRED interactive buffer."
+  (interactive)
+  (deterred-dispatcher))
 
 (provide 'deterred)
 ;;; deterred.el ends here

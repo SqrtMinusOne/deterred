@@ -38,6 +38,7 @@
 (require 'request)
 (require 'iso8601)
 (require 'cl-lib)
+(require 'uuidgen)
 (require 'org-duration)
 
 (defconst deterred-wakatime-key-mappings
@@ -402,6 +403,7 @@ large value and download everything, but I haven't tried this."
             (message "Done fetching %s projects from WakaTime"
                      (seq-length project-names)))))))))
 
+;;;###autoload
 (defclass deterred-wakatime (deterred-source)
   ((name :initform "Wakatime"))
   "DETERRED source for wakatime.")

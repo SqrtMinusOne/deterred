@@ -570,6 +570,7 @@ DIRECTORY should contain the 'messages' folder from a VK export."
        db
        '(messenger_chat messenger_user messenger_message)))))
 
+;;;###autoload
 (defclass deterred-messengers (deterred-source)
   ((name :initform "Messengers"))
   "DETERRED source for messengers.")

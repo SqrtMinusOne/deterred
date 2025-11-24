@@ -35,8 +35,10 @@
 (require 'outline)
 (require 'validate)
 (require 'crm)
+
 (require 'deterred-format)
 (require 'deterred-grid)
+(require 'deterred-utils)
 
 (defcustom deterred-dashboards nil
   "List of DETERRED dashboard objects."

@@ -125,6 +125,7 @@ FILE is the path to the database."
       (deterred-db-mark-updated-batch
        db '(podcasts_listened podcasts_feed)))))
 
+;;;###autoload
 (defclass deterred-podcasts (deterred-source)
   ((name :initform "Podcasts"))
   "DETERRED source for podcasts.")

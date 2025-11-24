@@ -44,6 +44,7 @@
   :group 'deterred
   :type 'list)
 
+;;;###autoload
 (defclass deterred-source ()
   ((name :initarg :name :type string)
    (warn-days :initarg :warn-days :type (or null integer) :initform 7))

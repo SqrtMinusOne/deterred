@@ -26,12 +26,15 @@
 ;; TODO
 
 ;;; Code:
-(require 'deterred-db)
-(require 'deterred-format)
-(require 'deterred-locations)
 (require 'pcsv)
 (require 'libmpdel)
 (require 'org-duration)
+(require 'uuidgen)
+(require 'iso8601)
+
+(require 'deterred-db)
+(require 'deterred-format)
+(require 'deterred-locations)
 
 (defconst deterred-mpd-uuid-namespace
   "c66d74fc-c243-4d8e-9e0a-72a88b78132b")
@@ -225,6 +228,7 @@ The columns of the file have to match the input of
           (nth 1 update-datum)
           (nth 0 update-datum)))))))
 
+;;;###autoload
 (defclass deterred-mpd (deterred-source)
   ((name :initform "Music (MPD)"))
   "DETERRED source for mpd.")

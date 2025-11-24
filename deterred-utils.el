@@ -26,10 +26,12 @@
 ;; Different utility functions for DETERRED.
 
 ;;; Code:
-(require 'deterred-format)
 (require 'pcsv)
 (require 'validate)
+(require 'backtrace)
 (require 'request)
+
+(require 'deterred-format)
 
 (defun deterred-utils-csv-to-alist (file)
   "Read a CSV FILE into alist with `pcsv'."

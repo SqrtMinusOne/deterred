@@ -795,6 +795,7 @@ If CALLBACK is non-nil, call it when the sync is done."
                 (_ nil))))))))
     :error #'deterred-utils-on-request-error))
 
+;;;###autoload
 (defclass deterred-activitywatch (deterred-source)
   ((name :initform "ActivityWatch")
    (warn-days :initform 1))

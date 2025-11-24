@@ -309,6 +309,7 @@ Call CALLBACK when done."
      (deterred-read-it-later--store data)
      (when callback (funcall callback)))))
 
+;;;###autoload
 (defclass deterred-read-it-later (deterred-source)
   ((name :initform "Read It Later")
    (sources :initarg :sources :initform '(readeck)))

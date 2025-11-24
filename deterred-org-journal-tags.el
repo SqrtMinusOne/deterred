@@ -26,10 +26,13 @@
 ;; TODO
 
 ;;; Code:
-(require 'deterred-db)
-(require 'deterred-locations)
 (require 'cl-lib)
 (require 'org-journal-tags)
+(require 'uuidgen)
+
+(require 'deterred-db)
+(require 'deterred-locations)
+(require 'deterred-format)
 
 (defconst deterred-org-journal-tags-uuid-namespace
   "97cdf2aa-0f6f-4c03-8071-73483503db49")
@@ -132,6 +135,7 @@ DB is the sqlite database object, used to determine the timezones."
        db
        '(org_journal_record org_journal_tag org_journal_record_tag)))))
 
+;;;###autoload
 (defclass deterred-org-journal-tags (deterred-source)
   ((name :initform "Org Journal"))
   "DETERRED source for org-journal-tags.")

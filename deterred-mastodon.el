@@ -30,6 +30,7 @@
 (require 'magit-section)
 (require 'iso8601)
 (require 'request)
+(require 'uuidgen)
 
 (require 'deterred-db)
 (require 'deterred-source)
@@ -161,6 +162,7 @@ Call CALLBACK when done."
                                           callback))))))
       :error #'deterred-utils-on-request-error)))
 
+;;;###autoload
 (defclass deterred-mastodon (deterred-source)
   ((name :initform "Mastodon")
    (server :initarg :server)

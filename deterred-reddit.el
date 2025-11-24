@@ -85,6 +85,7 @@
         (deterred-db-mark-updated-batch
          db '(reddit_post reddit_comment))))))
 
+;;;###autoload
 (defclass deterred-reddit (deterred-source)
   ((name :initform "Reddit"))
   "DETERRED source for reddit.")

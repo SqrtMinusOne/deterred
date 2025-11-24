@@ -176,6 +176,7 @@ I think."
        db (nth 0 data) (nth 1 data))
       (deterred-digikam-infer-locations db))))
 
+;;;###autoload
 (defclass deterred-digikam (deterred-source)
   ((name :initform "Photos (digikam)")
    (warn-days :initform 7)
