@@ -338,6 +338,7 @@ DB is the SQLite connection object."
     (user-error "Not in `deterred-dispatcher' mode!"))
   (deterred-dispatcher--render-contents))
 
+;;;###autoload
 (defun deterred-dispatcher ()
   "Open DETERRED interactive buffer."
   (interactive)

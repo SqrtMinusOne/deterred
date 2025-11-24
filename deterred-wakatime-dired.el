@@ -275,6 +275,7 @@ Same as `dired-map-dired-file-lines', but include directories."
   "Remove `deterred-wakatime-dired' info from the Dired buffer."
   (remove-overlays (point-min) (point-max) 'deterred-wakatime-dired t))
 
+;;;###autoload
 (define-minor-mode deterred-wakatime-dired-mode
   "Display wakatime info in Dired."
   :global t
@@ -307,6 +308,7 @@ Related meaning stored under PATH or containing project root in PATH."
 (defvar deterred-wakatime-dired--dashboard nil
   "A Wakatime Dashboard instance.")
 
+;;;###autoload
 (defun deterred-wakatime-dired-dashboard (paths)
   "Open the Wakatime dashboard for PATHS."
   (interactive

@@ -5,7 +5,7 @@
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (requests "0.3.2") (transient "0.9.2") (magit-section "4.3.6") (org "9.6.6"))
+;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (request "0.3.2") (validate "1.0.4") (magit-section "4.3.6") (org "9.6.6"))
 ;; Homepage: https://github.com/SqrtMinusOne/deterred.el
 
 ;; This file is NOT part of GNU Emacs.
@@ -28,6 +28,37 @@
 ;; TODO
 
 ;;; Code:
+;; Utilities
+(require 'deterred-faces)
+(require 'deterred-format)
+(require 'deterred-utils)
+
+;; Core logic
+(require 'deterred-source)
+(require 'deterred-db)
+(require 'deterred-backup)
+(require 'deterred-grid)
+(require 'deterred-dashboard)
+
+;; Datasources
+(require 'deterred-locations)
+(require 'deterred-activitywatch)
+(require 'deterred-digikam)
+(require 'deterred-habits)
+(require 'deterred-mastodon)
+(require 'deterred-messengers)
+(require 'deterred-mpd)
+(require 'deterred-org)
+(require 'deterred-org-journal-tags)
+(require 'deterred-podcasts)
+(require 'deterred-read-it-later)
+(require 'deterred-reddit)
+(require 'deterred-wakatime)
+
+;; Integrations
+(require 'deterred-mpd-emms)
+(require 'deterred-wakatime-dired)
+
 (defgroup deterred nil
   "Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard."
   :group 'applications)
@@ -35,6 +66,9 @@
 (defgroup deterred-sources nil
   "Sources configuration for DETERRED."
   :group 'deterred)
+
+;;;###autoload
+(defalias 'deterred 'deterred-dispatcher)
 
 (provide 'deterred)
 ;;; deterred.el ends here

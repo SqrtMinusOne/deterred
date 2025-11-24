@@ -292,6 +292,7 @@ PARAMS is the parameters, DATA is data as returned by
                 (deterred-dashboard-messengers)
                 (deterred-dashboard-org-journal-tags)))))
 
+;;;###autoload
 (defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.
 

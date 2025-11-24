@@ -77,8 +77,9 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 | [[https://readeck.org/en/][Readeck]]            | +      | API               |
 | [[https://wallabag.org/][Wallabag]]           | +      | API               |
 | [[https://reddit.com/][Reddit]]             | +      | CSV dump          |
-| [[https://manifold.markets/][Manifold]]           |        | API               |
 | hledger            |        | CLI               |
+| Claude Code        |        | [[https://github.com/ryoppippi/ccusage][ccusage]]           |
+| [[https://manifold.markets/][Manifold]]           |        | API               |
 | org-agenda         |        | Org files         |
 | org-roam           |        | Database + git    |
 | [[https://open-meteo.com/][Open Meteo]] ([[https://github.com/SqrtMinusOne/biome][BIOME]]) |        | API               |

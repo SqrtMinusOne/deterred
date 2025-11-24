@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-format)
 (require 'pcsv)
 (require 'libmpdel)
 (require 'org-duration)
