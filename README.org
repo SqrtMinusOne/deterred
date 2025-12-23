@@ -87,6 +87,7 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 | GitLab             |        | API               |
 | Discord            |        | CSV dump          |
 | [[https://notmuchmail.org/][notmuch]]            |        | Database          |
+| Подорожник         |        |                   |
 
 * Plans
 Interfaces:
@@ -107,6 +108,8 @@ Meta:
 - [X] Common dialog for request errors
 - [X] Extract faces?
 - [ ] Maybe not throw an error if there isn't a location.
+- [X] Auto-run backups on start
+- [ ] Sync
 
 Dashboards:
 - [X] MPD
@@ -137,6 +140,7 @@ ActivityWatch:
 
 Messengers:
 - [X] Load VK dump
+- [ ] Time in work chats
 
 WakaTime:
 - [X] Integrate with dired

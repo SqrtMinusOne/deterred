@@ -227,7 +227,8 @@ Emacs down quite a bit."
 
 (defun deterred-digikam--show-gallery (button)
   (let* ((db (deterred-db--init))
-         (timestamp (oref (magit-section-at) value))
+         (start (car (oref (magit-section-at) value)))
+         (end (cdr (oref (magit-section-at) value)))
          (photos
           (deterred-db-select-alist
            db "SELECT p.id, p.timestamp, p.camera, ? || a.path || '/' || p.filename path
@@ -235,7 +236,7 @@ Emacs down quite a bit."
                       INNER JOIN digikam_album a ON p.album_id = a.id
                       WHERE p.timestamp BETWEEN ? AND ?"
            (list (expand-file-name deterred-digikam-folder)
-                 timestamp (+ (* 60 60 24) timestamp))))
+                 start end)))
          (inhibit-read-only t))
     (save-excursion
       (goto-char (button-start button))
@@ -274,9 +275,9 @@ Emacs down quite a bit."
             (delete-region (button-start button) (button-end button)))))
       (goto-char (1+ (button-end button))))))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-digikam) timestamp &optional db)
-  "Make digiKam summary for TIMESTAMP.
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-digikam) start end &optional db)
+  "Make digiKam summary for [START, END].
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
@@ -284,7 +285,7 @@ DB is the sqlite database object."
           (or (caar (sqlite-select
                      db "SELECT count(*) FROM digikam_photo
                          WHERE timestamp BETWEEN ? AND ?"
-                     (list timestamp (+ (* 60 60 24) timestamp))))
+                     (list start end)))
               0)))
     (when (> total-photos 0)
       `((:short-description

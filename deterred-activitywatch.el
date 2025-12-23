@@ -831,7 +831,7 @@ end timestamp."
                     FROM activitywatch_notafk_period")))
     (cons (caar data) (cadar data))))
 
-(cl-defmethod deterred-source-day-summary
+(cl-defmethod deterred-source-range-summary
   ((_source deterred-activitywatch) timestamp &optional db)
   "Make ActivityWatch summary for TIMESTAMP.
 

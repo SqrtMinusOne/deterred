@@ -34,7 +34,10 @@
 ;; value.
 ;;
 ;; `deterred-source-day-summary' implements summary for the "on this
-;; day" interface.
+;; day" interface, `deterred-source-range-summary' implements summary
+;; for a date range.  The default implementation of
+;; `deterred-source-day-summary' calls `deterred-source-range-summary'
+;; for one day.
 
 ;;; Code:
 (require 'eieio)
@@ -93,8 +96,8 @@ Call CALLBACK when done.")
     #'cl--generic-method-specializers
     (cl--generic-method-table (cl--generic #'deterred-source-actions)))))
 
-(cl-defgeneric deterred-source-day-summary (source timestamp &optional db)
-  "Make a summary for TIMESTAMP from SOURCE.
+(cl-defgeneric deterred-source-range-summary (source start end &optional db)
+  "Make a summary for [START, END] from SOURCE.
 
 Return an alist with the following keys:
 - `:short-description'
@@ -106,9 +109,22 @@ If `:long-description-fn' is non-nil, it will be used instead of
 `long-description'.  This is useful when the description doesn't fit
 into string, e.g., it needs to call `magit-insert-section'.")
 
-(cl-defmethod deterred-source-day-summary ((_source deterred-source) _timestamp &optional _db)
-  "A dummy implementation of `deterred-source-day-summary'."
+(cl-defmethod deterred-source-range-summary ((_source deterred-source) _start _end &optional _db)
+  "A dummy implementation of `deterred-source-range-summary'."
   nil)
+
+(cl-defgeneric deterred-source-day-summary (source timestamp &optional db)
+  "Make a summary for TIMESTAMP from SOURCE.
+
+See `deterred-source-range-summary' for the description.")
+
+(cl-defmethod deterred-source-day-summary ((source deterred-source) timestamp &optional db)
+  "A dummy implementation of `deterred-source-day-summary'.
+
+SOURCE is a `deterred-source' instance.  TIMESTAMP has to be rounded
+to the start of day, e.g. use `deterred-utils-ts-to-day-start'.  DB is
+a SQLite connection objects."
+  (deterred-source-range-summary source timestamp (+ (* 60 60 24) timestamp) db))
 
 (defun deterred-source--actions-pick (action-table &optional callback)
   "Prompt the user with ACTION-TABLE and execute the pick.

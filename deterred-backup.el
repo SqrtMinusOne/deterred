@@ -62,7 +62,10 @@ KIND is a symbol, STAMPS is a list of strings.  Filenames to create
 are formed as follows: <file>.<kind>.<stamps>.
 
 All files starting with <file>.<kind> with wrong stamps will be
-deleted."
+deleted.
+
+Return a cons cell with `car' set to the number of deleted files, and
+`cdr' to the number of created files."
   (let* ((file-name (file-name-nondirectory file))
          (source-files
           (directory-files
@@ -77,12 +80,17 @@ deleted."
                (file-name-as-directory backups-dir) file-name
                "." (symbol-name kind) "." stamp))
             stamps)))
-         (senior-file (car target-files)))
+         (senior-file (car target-files))
+         (deleted 0)
+         (created 0))
     ;; Remove extra files
     (dolist (extra-file (seq-difference source-files target-files))
-      (delete-file extra-file))
+      (delete-file extra-file)
+      (cl-incf deleted))
     (unless (file-exists-p senior-file)
-      (copy-file file senior-file nil t))))
+      (copy-file file senior-file nil t)
+      (cl-incf created))
+    (cons deleted created)))
 
 (defun deterred-backup--make-stamps (kind keep-params)
   "Create unique stamps for backup filenames.
@@ -159,12 +167,19 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
   (unless (file-exists-p file)
     (error "File to backup %s doesn't exist" file))
   (mkdir backups-dir t)
-  (dolist (keep-param keep-params)
-    (deterred-backup--make-copies
-     file backups-dir (car keep-param)
-     (deterred-backup--make-stamps
-      (car keep-param)
-      keep-params))))
+  (let ((created 0)
+        (deleted 0))
+    (dolist (keep-param keep-params)
+      (let ((res (deterred-backup--make-copies
+                  file backups-dir (car keep-param)
+                  (deterred-backup--make-stamps
+                   (car keep-param)
+                   keep-params))))
+        (cl-incf deleted (car res))
+        (cl-incf created (cdr res))))
+    (if (or (< 0 deleted) (< 0 created))
+        (message "Created %d and deleted %d files" created deleted)
+      (message "No more backups necessary"))))
 
 (defun deterred-backup ()
   "Backup the DETERRED database."

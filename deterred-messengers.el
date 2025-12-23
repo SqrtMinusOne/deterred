@@ -597,9 +597,9 @@ Run CALLBACK when done."
      ("Load VK HTML" deterred-messengers-load-vk-html nil))
    callback))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-messengers) timestamp &optional db)
-  "Make messengers summary for TIMESTAMP.
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-messengers) start end &optional db)
+  "Make messengers summary for [START, END].
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
@@ -619,7 +619,7 @@ DB is the sqlite database object."
               HAVING sum(CASE WHEN mm.sender_id = ? THEN 1 ELSE 0 END) > 0
               ORDER BY mc.\"type\", sent DESC"
            (list deterred-messengers-my-id deterred-messengers-my-id
-                 timestamp (+ (* 60 60 24) timestamp)
+                 start end
                  deterred-messengers-my-id)))
          (msg-by-type
           (seq-reduce (lambda (acc datum)

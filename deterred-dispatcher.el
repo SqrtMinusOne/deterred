@@ -61,6 +61,14 @@
           (string :tag "String")
           (function :tag "Function")))
 
+(defcustom deterred-dispatcher-startup-hook nil
+  "Run on the first invocation of the DETERRED dispatcher."
+  :group 'deterred
+  :type 'hook)
+
+(defvar deterred-dispatcher-startup-p nil
+  "If non-nil, the DETERRED dispatched has been invoked.")
+
 (defun deterred-dispatcher--magit-section-toggle-workaround (section)
   "`magit-section-toggle' with a workaround for invisible lines.
 
@@ -226,42 +234,58 @@ given timestamp."
           (format-time-string deterred-dispatcher-date-format timestamp))
     datum))
 
+(defun deterred-dispatcher--render-items (datum section-type section-value)
+  "Render items from DATUM.
+
+DATUM is an alist with source names as keys.
+SECTION-TYPE is the magit-section type for each item.
+SECTION-VALUE is the value to pass to magit-insert-section."
+  (cl-loop
+   for (source-name . item) in datum
+   unless (symbolp source-name)
+   do (magit-insert-section (section-type section-value t)
+        (insert (format "%s: %s"
+                        (propertize source-name
+                                    'face 'deterred-faces-source-name)
+                        (alist-get :short-description item)))
+        (magit-insert-heading)
+        (when-let (long-description (alist-get :long-description item))
+          (insert long-description "\n"))
+        (when-let (long-description-fn
+                   (alist-get :long-description-fn item))
+          (condition-case-unless-debug err
+              (funcall long-description-fn item)
+            (error (insert (propertize
+                            (concat "Render error: " (error-message-string err))
+                            'face 'error) "\n")))))))
+
 (defun deterred-dispatcher--render-timestamp (timestamp datum)
   "Render one DATUM for TIMESTAMP.
 
 DATUM is as returned by `deterred-dispatcher--on-this-day-data'."
-  (magit-insert-section (deterred-dispatcher-on-this-day-day timestamp nil)
+  (magit-insert-section (deterred-dispatcher-on-this-day-day
+                         (cons
+                          timestamp
+                          (+ (* 60 60 24) timestamp))
+                         nil)
     (insert (propertize
              (format "%s, %s"
                      (alist-get :description datum)
                      (format-time-string deterred-dispatcher-date-format timestamp))
              'face 'deterred-faces-section-heading-2))
     (magit-insert-heading)
-    (cl-loop
-     for (source-name . item) in datum
-     unless (symbolp source-name)
-     do (magit-insert-section (deterred-dispatcher-on-this-day-item timestamp t)
-          (insert (format "%s: %s"
-                          (propertize source-name
-                                      'face 'deterred-faces-source-name)
-                          (alist-get :short-description item)))
-          (magit-insert-heading)
-          (when-let (long-description (alist-get :long-description item))
-            (insert long-description "\n"))
-          (when-let (long-description-fn
-                     (alist-get :long-description-fn item))
-            (condition-case-unless-debug err
-                (funcall long-description-fn item)
-              (error (insert (propertize
-                              (concat "Render error: " (error-message-string err))
-                              'face 'error) "\n"))))))
+    (deterred-dispatcher--render-items
+     datum
+     'deterred-dispatcher-on-this-day-item
+     (cons timestamp (+ (* 60 60 24) timestamp)))
     (insert "\n")))
 
 (defun deterred-dispatcher-day (timestamp)
   "Get summary for one particular day.
 
 TIMESTAMP is a UNIX timestamp."
-  (interactive (list (time-convert (org-read-date nil t) 'integer)))
+  (interactive (list (deterred-utils-ts-to-day-start
+                      (time-convert (org-read-date nil t) 'integer))))
   (let ((datum (deterred-dispatcher--day-data nil timestamp))
         (buffer-name (format "*DETERRED-<%s>*" (format-time-string "%F" timestamp))))
     (when-let ((buffer (get-buffer buffer-name)))
@@ -277,6 +301,85 @@ TIMESTAMP is a UNIX timestamp."
             (deterred-dispatcher-mode))
           (magit-insert-section (deterred-info)
             (deterred-dispatcher--render-timestamp timestamp datum)
+            (let ((magit-section-cache-visibility nil))
+              (magit-section-show magit-root-section))))))))
+
+(defun deterred-dispatcher--range-data (start-timestamp end-timestamp &optional db)
+  "Return data for a date range.
+
+START-TIMESTAMP and END-TIMESTAMP are UNIX timestamps.
+DB is a SQLite connection object.
+
+Returns an alist with keys:
+- `:description' - formatted description of the range
+- Source names (strings) - each containing the result of
+  `deterred-source-range-summary' plus `:source' key."
+  (let ((db (or db (deterred-db--init)))
+        datum)
+    (mapcar
+     (lambda (source)
+       (let ((value (condition-case-unless-debug err
+                        (deterred-source-range-summary source start-timestamp end-timestamp db)
+                      (error `((:short-description
+                                . ,(propertize (error-message-string err)
+                                               'face 'error))))))
+             (source-name (oref source name)))
+         (when value
+           (setf (alist-get :source value) source)
+           (setf (alist-get source-name datum nil nil #'equal) value))))
+     deterred-sources)
+    (setf (alist-get :description datum)
+          (format "%s - %s"
+                  (format-time-string deterred-dispatcher-date-format start-timestamp)
+                  (format-time-string deterred-dispatcher-date-format end-timestamp)))
+    datum))
+
+(defun deterred-dispatcher--render-range (start-timestamp end-timestamp datum)
+  "Render DATUM for a date range.
+
+START-TIMESTAMP and END-TIMESTAMP are UNIX timestamps.
+DATUM is as returned by `deterred-dispatcher--range-data'."
+  (magit-insert-section (deterred-dispatcher-range
+                         (cons start-timestamp end-timestamp)
+                         nil)
+    (insert (propertize
+             (alist-get :description datum)
+             'face 'deterred-faces-section-heading-2))
+    (magit-insert-heading)
+    (deterred-dispatcher--render-items
+     datum
+     'deterred-dispatcher-range-item
+     (cons start-timestamp end-timestamp))
+    (insert "\n")))
+
+(defun deterred-dispatcher-range (start-timestamp end-timestamp)
+  "Get summary for a date range.
+
+START-TIMESTAMP and END-TIMESTAMP are UNIX timestamps."
+  (interactive
+   (list (deterred-utils-ts-to-day-start
+          (time-convert (org-read-date nil t nil "Start date: ") 'integer))
+         (deterred-utils-ts-to-day-end
+          (time-convert (org-read-date nil t nil "End date: ") 'integer))))
+  (when (> start-timestamp end-timestamp)
+    (user-error "Start date must be before or equal to end date"))
+  (let ((datum (deterred-dispatcher--range-data start-timestamp end-timestamp))
+        (buffer-name (format "*DETERRED-<%s to %s>*"
+                             (format-time-string "%F" start-timestamp)
+                             (format-time-string "%F" end-timestamp))))
+    (when-let ((buffer (get-buffer buffer-name)))
+      (kill-buffer buffer))
+    (let ((buffer (get-buffer-create buffer-name)))
+      (switch-to-buffer-other-window buffer)
+      (with-current-buffer buffer
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (setq-local widget-push-button-prefix "")
+          (setq-local widget-push-button-suffix "")
+          (unless (derived-mode-p #'deterred-dispatcher-mode)
+            (deterred-dispatcher-mode))
+          (magit-insert-section (deterred-info)
+            (deterred-dispatcher--render-range start-timestamp end-timestamp datum)
             (let ((magit-section-cache-visibility nil))
               (magit-section-show magit-root-section))))))))
 
@@ -299,6 +402,16 @@ DB is the SQLite connection object."
                  :notify (lambda (&rest _)
                            (call-interactively #'deterred-dashboard-open))
                  "[Dashboards...]")
+  (insert " ")
+  (widget-create 'push-button
+                 :notify (lambda (&rest _)
+                           (call-interactively #'deterred-dispatcher-day))
+                 "[View day...]")
+  (insert " ")
+  (widget-create 'push-button
+                 :notify (lambda (&rest _)
+                           (call-interactively #'deterred-dispatcher-range))
+                 "[View range...]")
   (insert " ")
   (widget-create 'push-button
                  :notify (lambda (&rest _)
@@ -348,7 +461,10 @@ DB is the SQLite connection object."
   (let ((buffer (get-buffer-create deterred-dispatcher-buffer-name)))
     (switch-to-buffer-other-window buffer)
     (with-current-buffer buffer
-      (deterred-dispatcher--render-contents))))
+      (deterred-dispatcher--render-contents)
+      (unless deterred-dispatcher-startup-p
+        (run-hooks 'deterred-dispatcher-startup-hook)
+        (setq deterred-dispatcher-startup-p t)))))
 
 (provide 'deterred-dispatcher)
 ;;; deterred-dispatcher.el ends here
