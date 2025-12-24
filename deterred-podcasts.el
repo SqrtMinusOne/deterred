@@ -184,5 +184,72 @@ Run CALLBACK when done."
                    (f " (" (f-acc "iter->'podcast") ")")))
               podcasts)))))))
 
+(defun deterred-podcasts--render-episodes-by-podcast (episodes-by-podcast)
+  "Render podcast EPISODES-BY-PODCAST grouped by podcast.
+
+EPISODES-BY-PODCAST is a list of (podcast-name . episodes-list) pairs."
+  (dolist (podcast-group (seq-sort-by
+                          (lambda (group)
+                            (apply #'+ (mapcar (lambda (ep) (alist-get 'played_duration ep))
+                                               (cdr group))))
+                          #'>
+                          episodes-by-podcast))
+    (let ((podcast-name (car podcast-group))
+          (episodes (cdr podcast-group)))
+      (magit-insert-section (deterred-podcast-feed t t)
+        (insert
+         (propertize
+          (format "%s (%d episode%s)"
+                  podcast-name
+                  (length episodes)
+                  (if (= (length episodes) 1) "" "s"))
+          'face 'deterred-faces-section-heading-3))
+        (magit-insert-heading)
+        (dolist (episode episodes)
+          (magit-insert-section (deterred-podcast-episode t t)
+            (insert
+             (propertize
+              (alist-get 'title episode)
+              'face 'deterred-faces-section-heading-4
+              'mouse-face 'highlight
+              'help-echo "Click to open URL"
+              'keymap (let ((map (make-sparse-keymap)))
+                        (define-key map [mouse-1]
+                                    (lambda ()
+                                      (interactive)
+                                      (browse-url (alist-get 'url episode))))
+                        (define-key map (kbd "RET")
+                                    (lambda ()
+                                      (interactive)
+                                      (browse-url (alist-get 'url episode))))
+                        map)))
+            (magit-insert-heading)))))))
+
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-podcasts) start end &optional db)
+  "Make podcasts summary for [START, END].
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (episodes
+          (deterred-db-select-alist
+           db "SELECT l.*, f.title podcast FROM podcasts_listened l
+               INNER JOIN podcasts_feed f ON f.id = l.feed_id
+               WHERE l.timestamp BETWEEN ? AND ?
+               ORDER BY f.title, l.timestamp DESC"
+           (list start end)))
+         (episodes-by-podcast (seq-group-by (lambda (ep) (alist-get 'podcast ep)) episodes))
+         (podcast-count (length episodes-by-podcast)))
+    (when episodes
+      `((:short-description
+         . ,(format "%d podcast%s (%d episode%s)"
+                    podcast-count
+                    (if (= podcast-count 1) "" "s")
+                    (length episodes)
+                    (if (= (length episodes) 1) "" "s")))
+        (:long-description-fn
+         . ,(lambda (&rest _)
+              (deterred-podcasts--render-episodes-by-podcast episodes-by-podcast)))))))
+
 (provide 'deterred-podcasts)
 ;;; deterred-podcasts.el ends here

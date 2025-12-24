@@ -206,7 +206,7 @@ SOURCE is an instance of `deterred-mastodon'."
       (insert
        (propertize
         (format "%s on %s via %s"
-                (format-time-string deterred-dispatcher-time-format
+                (format-time-string deterred-dispatcher-date-time-format
                                     (alist-get 'timestamp post))
                 (alist-get 'server post)
                 (alist-get 'application post))
@@ -222,22 +222,22 @@ SOURCE is an instance of `deterred-mastodon'."
           (buffer-string))))
       (insert "\n"))))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-mastodon) timestamp &optional db)
-  "Make Mastodon summary for TIMESTAMP.
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-mastodon) start end &optional db)
+  "Make Mastodon summary for [START, END].
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
          (posts (deterred-db-select-alist
                  db "SELECT * FROM mastodon_post
                      WHERE timestamp BETWEEN ? AND ? AND is_reply = 0"
-                 (list timestamp (+ (* 60 60 24) timestamp))))
+                 (list start end)))
          (comments-count
           (or (caar
                (sqlite-select
                 db "SELECT count(*) FROM mastodon_post
                     WHERE timestamp BETWEEN ? AND ? AND is_reply = 1"
-                (list timestamp (+ (* 60 60 24) timestamp))))
+                (list start end)))
               0))
          (unique-servers
           (seq-uniq (mapcar (lambda (post) (alist-get 'server post)) posts))))

@@ -375,5 +375,69 @@ SOURCE is the instance of `deterred-read-it-later'."
                              (browse-url (alist-get iter 'url)))))
               articles)))))))
 
+(defun deterred-read-it-later--render-articles-by-host (articles-by-host)
+  "Render read-it-later ARTICLES-BY-HOST grouped by host.
+
+ARTICLES-BY-HOST is a list of (host . articles-list) pairs."
+  (dolist (host-group (seq-sort-by
+                       (lambda (group) (length (cdr group)))
+                       #'>
+                       articles-by-host))
+    (let ((host (car host-group))
+          (articles (cdr host-group)))
+      (magit-insert-section (deterred-read-it-later-host t t)
+        (insert
+         (propertize
+          (format "%s (%d article%s)"
+                  host
+                  (length articles)
+                  (if (= (length articles) 1) "" "s"))
+          'face 'deterred-faces-section-heading-3))
+        (magit-insert-heading)
+        (dolist (article articles)
+          (magit-insert-section (deterred-read-it-later-article t t)
+            (insert
+             (propertize
+              (alist-get 'title article)
+              'face 'deterred-faces-section-heading-4
+              'mouse-face 'highlight
+              'help-echo "Click to open article"
+              'keymap (let ((map (make-sparse-keymap)))
+                        (define-key map [mouse-1]
+                                    (lambda ()
+                                      (interactive)
+                                      (browse-url (alist-get 'href article))))
+                        (define-key map (kbd "RET")
+                                    (lambda ()
+                                      (interactive)
+                                      (browse-url (alist-get 'href article))))
+                        map)))
+            (magit-insert-heading)))))))
+
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-read-it-later) start end &optional db)
+  "Make read-it-later summary for [START, END].
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (articles
+          (deterred-db-select-alist
+           db "SELECT * FROM read_it_later_article
+               WHERE read_at BETWEEN ? AND ?
+               ORDER BY host, read_at DESC"
+           (list start end)))
+         (articles-by-host (seq-group-by (lambda (art) (alist-get 'host art)) articles))
+         (host-count (length articles-by-host)))
+    (when articles
+      `((:short-description
+         . ,(format "%d host%s (%d article%s)"
+                    host-count
+                    (if (= host-count 1) "" "s")
+                    (length articles)
+                    (if (= (length articles) 1) "" "s")))
+        (:long-description-fn
+         . ,(lambda (&rest _)
+              (deterred-read-it-later--render-articles-by-host articles-by-host)))))))
+
 (provide 'deterred-read-it-later)
 ;;; deterred-read-it-later.el ends here

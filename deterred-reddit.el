@@ -118,7 +118,7 @@ Run CALLBACK when done."
        (deterred-format
         (propertize
          (f
-          (format-time-string deterred-dispatcher-time-format
+          (format-time-string deterred-dispatcher-date-time-format
                               (alist-get 'timestamp post))
           ": "
           (if-let (title (alist-get 'title post))
@@ -135,20 +135,23 @@ Run CALLBACK when done."
                                (browse-url (alist-get 'url post)))))
          "\n\n")))))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-reddit) timestamp &optional db)
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-reddit) start end &optional db)
+  "Make Reddit summary for [START, END].
+
+DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
          (posts (deterred-db-select-alist
                  db "SELECT * FROM reddit_post
                      WHERE timestamp BETWEEN ? AND ?
                      ORDER BY timestamp ASC"
-                 (list timestamp (+ (* 60 60 24) timestamp))))
+                 (list start end)))
          (comments
           (deterred-db-select-alist
            db "SELECT * FROM reddit_comment
                WHERE timestamp BETWEEN ? AND ?
                ORDER BY timestamp ASC"
-           (list timestamp (+ (* 60 60 24) timestamp))))
+           (list start end)))
          (comment-subreddits
           (seq-uniq
            (mapcar (lambda (c) (format "r/%s" (alist-get 'subreddit c)))
@@ -163,7 +166,7 @@ Run CALLBACK when done."
                  " and ")
                (f (f-num (seq-length comments)) " comments"
                   (if (> (seq-length comment-subreddits) 2)
-                      (f " on " (seq-length comment-subreddits) "subreddits")
+                      (f " on " (seq-length comment-subreddits) " subreddits")
                     (f " on " (f-join comment-subreddits ", ")))))))
         (:long-description-fn
          . ,(lambda (&rest _) (deterred-reddit--render-data posts comments)))))))

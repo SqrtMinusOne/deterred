@@ -832,35 +832,37 @@ end timestamp."
     (cons (caar data) (cadar data))))
 
 (cl-defmethod deterred-source-range-summary
-  ((_source deterred-activitywatch) timestamp &optional db)
-  "Make ActivityWatch summary for TIMESTAMP.
+  ((_source deterred-activitywatch) start end &optional db)
+  "Make ActivityWatch summary for [START, END].
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
-         (day (format-time-string "%F" timestamp))
+         (start-day (format-time-string "%F" (deterred-utils-ts-to-day-start start)))
+         (end-day (format-time-string "%F" (deterred-utils-ts-to-day-start end)))
          (total-minutes
           (or (alist-get
                'total (car
-                       (deterred-db-select-alist
+                       (deterred-db-select-template-alist
                         db "SELECT sum(total_duration) / 60 total
                         FROM activitywatch_currentwindow_agg
-                        WHERE day = ?"
-                        (list day))))
+                        WHERE day >= :start-day AND day <= :end-day"
+                        `((:start-day . ,start-day) (:end-day . ,end-day)))))
               0))
          (app-data
-          (deterred-db-select-alist
+          (deterred-db-select-template-alist
            db "SELECT app, total_duration / 60 total
                FROM activitywatch_currentwindow_agg
-               WHERE day = ?
+               WHERE day >= :start-day AND day <= :end-day
                ORDER BY total DESC
-               LIMIT ?"
-           (list day deterred-activitywatch-show-top-in-summary)))
+               LIMIT :top"
+           `((:start-day . ,start-day) (:end-day . ,end-day)
+             (:top . ,deterred-activitywatch-show-top-in-summary))))
          (hostname-data
-          (deterred-db-select-alist
+          (deterred-db-select-template-alist
            db "SELECT hostname, sum(total_duration) / 60 total
                FROM activitywatch_currentwindow_agg
-               WHERE day = ?"
-           (list day))))
+               WHERE day >= :start-day AND day <= :end-day"
+           `((:start-day . ,start-day) (:end-day . ,end-day)))))
     (when (> total-minutes 0)
       `((:short-description
          . ,(format "%s hours"

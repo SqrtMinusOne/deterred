@@ -437,37 +437,38 @@ Call CALLBACK when done."
     (user-error "Wakatime API key not set!"))
   (deterred-wakatime-api-load callback))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-wakatime) timestamp &optional db)
-  "Make WakaTime summary for TIMESTAMP.
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-wakatime) start end &optional db)
+  "Make WakaTime summary for [START, END].
 
 DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
          (total-data
           (deterred-db-select-alist
-           db "SELECT wp.name, wgt.total_seconds / 60 total
+           db "SELECT wp.name, sum(wgt.total_seconds) / 60 total
                FROM wakatime_projects wp
                INNER JOIN wakatime_grand_total wgt ON wgt.project_id = wp.id
-               WHERE wgt.timestamp = ?
-               ORDER BY wgt.total_seconds DESC"
-           (list timestamp)))
+               WHERE wgt.timestamp BETWEEN ? AND ?
+               GROUP BY wp.id, wp.name
+               ORDER BY total DESC"
+           (list start end)))
          (editor-data
           (deterred-db-select-alist
            db "SELECT we.name editor, sum(we.total_seconds) / 60 total
                FROM wakatime_editors we
-               WHERE we.timestamp = ?
+               WHERE we.timestamp BETWEEN ? AND ?
                GROUP BY we.name
                ORDER BY total DESC"
-           (list timestamp)))
+           (list start end)))
          (languages-data
           (deterred-db-select-alist
-           db "SELECT wl.name lang, wp.name project, wl.total_seconds / 60 total
+           db "SELECT wl.name lang, wp.name project, sum(wl.total_seconds) / 60 total
                FROM wakatime_languages wl
                INNER JOIN wakatime_projects wp ON wp.id = wl.project_id
-               WHERE wl.timestamp = ?
+               WHERE wl.timestamp BETWEEN ? AND ?
                GROUP BY wl.name
                ORDER BY total DESC"
-           (list timestamp)))
+           (list start end)))
          (total-minutes
           (apply #'+ (mapcar (lambda (d) (alist-get 'total d)) total-data)))
          (first-project-percentile (if (> total-minutes 0)

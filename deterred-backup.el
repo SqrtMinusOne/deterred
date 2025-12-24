@@ -212,7 +212,7 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
   "Return t if a fresh backup is required."
   (let ((start-of-day (deterred-utils-ts-to-day-start))
         (backups-last (deterred-backups-last)))
-    (> backups-last start-of-day)))
+    (< backups-last start-of-day)))
 
 (provide 'deterred-backup)
 ;;; deterred-backup.el ends here

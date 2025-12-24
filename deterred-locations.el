@@ -169,5 +169,37 @@ DB is the sqlite database object."
                   (alist-get 'name loc)
                   (alist-get 'timezone loc))))))
 
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-locations) start end &optional db)
+  "Make locations summary for [START, END].
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (location-changes
+          (deterred-db-select-alist
+           db "SELECT l.name, l.timezone, l.dst_mode, lt.timestamp
+               FROM location l
+               INNER JOIN location_times lt ON l.id = lt.location_id
+               WHERE lt.timestamp BETWEEN ? AND ?
+               ORDER BY lt.timestamp ASC"
+           (list start end))))
+    (when location-changes
+      `((:short-description
+         . ,(format "%d location change%s"
+                    (seq-length location-changes)
+                    (if (= (seq-length location-changes) 1) "" "s")))
+        (:long-description
+         . ,(deterred-format
+             (f-mapconcat
+              (f "- " (format-time-string "%Y-%m-%d" (alist-get 'timestamp iter))
+                 ": " (f-acc "iter->'name")
+                 " (offset "
+                 (f-num (+ (alist-get 'timezone iter)
+                           (deterred-locations--dst-offset-hours
+                            (alist-get 'timestamp iter)
+                            (alist-get 'dst_mode iter))))
+                 " hours)")
+              location-changes)))))))
+
 (provide 'deterred-locations)
 ;;; deterred-locations.el ends here

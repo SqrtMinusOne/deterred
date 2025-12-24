@@ -149,5 +149,33 @@ TIMESTAMP is the UNIX timestamp, DB is the SQLite connection object."
          . ,(deterred-format
              (f-mapconcat (f "- " (f-acc "iter->'habit")) habits)))))))
 
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-habits) start end &optional db)
+  "Make habits summary for [START, END].
+
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
+         (total-days (ceiling (/ (- end start) 86400.0)))
+         (habit-data
+          (deterred-db-select-alist
+           db "SELECT habit, COUNT(*) as count
+               FROM habit_record
+               WHERE timestamp BETWEEN ? AND ?
+               GROUP BY habit
+               ORDER BY count DESC"
+           (list start end))))
+    (when habit-data
+      `((:short-description
+         . ,(format "%d habits" (seq-length habit-data)))
+        (:long-description
+         . ,(deterred-format
+             (f-mapconcat
+              (f "- " (f-acc "iter->'habit") ": "
+                 (f-num (alist-get 'count iter)) " of "
+                 (f-num total-days) " ("
+                 (f-num (round (* 100.0 (/ (float (alist-get 'count iter)) total-days))))
+                 "%)")
+              habit-data)))))))
+
 (provide 'deterred-habits)
 ;;; deterred-habits.el ends here

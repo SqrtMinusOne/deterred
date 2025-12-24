@@ -61,6 +61,12 @@
           (string :tag "String")
           (function :tag "Function")))
 
+(defcustom deterred-dispatcher-date-time-format "%A, %Y-%m-%d %H:%M"
+  "Format string for date+time entries."
+  :type '(choice
+          (string :tag "String")
+          (function :tag "Function")))
+
 (defcustom deterred-dispatcher-startup-hook nil
   "Run on the first invocation of the DETERRED dispatcher."
   :group 'deterred
@@ -332,7 +338,7 @@ Returns an alist with keys:
           (format "%s - %s"
                   (format-time-string deterred-dispatcher-date-format start-timestamp)
                   (format-time-string deterred-dispatcher-date-format end-timestamp)))
-    datum))
+    (nreverse datum)))
 
 (defun deterred-dispatcher--render-range (start-timestamp end-timestamp datum)
   "Render DATUM for a date range.
@@ -416,7 +422,8 @@ DB is the SQLite connection object."
   (widget-create 'push-button
                  :notify (lambda (&rest _)
                            (deterred-backup))
-                 "[Backup]"))
+                 (propertize "[Backup]" 'face
+                             (when (deterred-backups-need-p) 'bold))))
 
 (defun deterred-dispatcher--render-contents ()
   "Render DETERRED dispatcher."

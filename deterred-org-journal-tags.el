@@ -163,14 +163,40 @@ Call CALLBACK when done."
     (funcall callback)))
 
 (defun deterred-org-journal-tags--render-refs (refs)
+  "Render org-journal-tags REFS.
+
+A ref is an instance of `org-journal-tag-reference'."
   (dolist (ref refs)
-    (magit-insert-section (deterred-org-journal-item t)
+    (magit-insert-section (deterred-org-journal-item t t)
       (insert
        (propertize
         (org-journal-tag-reference-time ref)
         'face 'deterred-faces-section-heading-4))
       (magit-insert-heading)
       (insert (org-journal-tags--extract-ref ref) "\n"))))
+
+(defun deterred-org-journal-tags--render-refs-by-days (refs)
+  "Render org-journal-tags REFS grouped by day.
+
+A ref is an instance of `org-journal-tag-reference'."
+  (let ((refs-by-day (seq-group-by #'org-journal-tag-reference-date refs)))
+    (dolist (day-group (seq-sort-by #'car #'< refs-by-day))
+      (let ((day (car day-group))
+            (day-refs (cdr day-group)))
+        (magit-insert-section (deterred-org-journal-day t t)
+          (insert
+           (propertize
+            (format-time-string "%Y-%m-%d" day)
+            'face 'deterred-faces-section-heading-3))
+          (magit-insert-heading)
+          (dolist (ref day-refs)
+            (magit-insert-section (deterred-org-journal-item t t)
+              (insert
+               (propertize
+                (org-journal-tag-reference-time ref)
+                'face 'deterred-faces-section-heading-4))
+              (magit-insert-heading)
+              (insert (org-journal-tags--extract-ref ref) "\n"))))))))
 
 (cl-defmethod deterred-source-day-summary
   ((_source deterred-org-journal-tags) timestamp &optional _db)
@@ -183,6 +209,19 @@ Call CALLBACK when done."
                              (if (= (seq-length refs) 1) "record" "records ")))
         (:long-description-fn
          . ,(lambda (&rest _) (deterred-org-journal-tags--render-refs refs)))))))
+
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-org-journal-tags) start end &optional _db)
+  "Make org-journal-tags summary for [START, END]."
+  (let ((refs (org-journal-tags-query
+               :start-date start
+               :end-date (- end 1))))
+    (when refs
+      `((:short-description
+         . ,(deterred-format (f-num (seq-length refs)) " "
+                             (if (= (seq-length refs) 1) "record" "records")))
+        (:long-description-fn
+         . ,(lambda (&rest _) (deterred-org-journal-tags--render-refs-by-days refs)))))))
 
 (provide 'deterred-org-journal-tags)
 ;;; deterred-org-journal-tags.el ends here

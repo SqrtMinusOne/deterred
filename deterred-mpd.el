@@ -228,6 +228,11 @@ The columns of the file have to match the input of
           (nth 1 update-datum)
           (nth 0 update-datum)))))))
 
+(defcustom deterred-mpd-max-artists 10
+  "Maximum number of artists to show in range summary."
+  :type 'integer
+  :group 'deterred)
+
 ;;;###autoload
 (defclass deterred-mpd (deterred-source)
   ((name :initform "Music (MPD)"))
@@ -246,14 +251,17 @@ end timestamp."
                     FROM mpd_song_listened")))
     (cons (caar data) (cadar data))))
 
-(cl-defmethod deterred-source-day-summary
-  ((_source deterred-mpd) timestamp &optional db)
+(cl-defmethod deterred-source-range-summary
+  ((_source deterred-mpd) start end &optional db)
+  "Make MPD summary for [START, END].
+
+DB is the sqlite database object."
   (let* ((db (or db (deterred-db--init)))
          (data (deterred-db-select-alist
                 db "SELECT * FROM mpd_song ms
                     INNER JOIN mpd_song_listened msl ON msl.mpd_song_id = ms.id
                     WHERE timestamp BETWEEN ? AND ?"
-                (list timestamp (+ (* 60 60 24) timestamp))))
+                (list start end)))
          (time-total (apply #'+ (mapcar (lambda (d) (alist-get 'duration d)) data)))
          (time-by-artist
           (deterred-db-select-alist
@@ -262,7 +270,7 @@ end timestamp."
                WHERE timestamp BETWEEN ? AND ?
                GROUP BY ms.album_artist
                ORDER BY duration DESC"
-           (list timestamp (+ (* 60 60 24) timestamp))))
+           (list start end)))
          (time-by-album
           (deterred-db-select-alist
            db "SELECT
@@ -273,8 +281,8 @@ end timestamp."
                INNER JOIN mpd_song_listened msl ON msl.mpd_song_id = ms.id
                WHERE timestamp BETWEEN ? AND ?
                GROUP BY ms.album_artist, ms.album
-               ORDER BY started ASC"
-           (list timestamp (+ (* 60 60 24) timestamp)))))
+               ORDER BY duration DESC"
+           (list start end))))
     (when data
       `((:short-description
          . ,(deterred-format
@@ -291,13 +299,22 @@ end timestamp."
                   (f " and " (f-num (- (seq-length time-by-artist) 2)) " others")))))
         (:long-description
          . ,(deterred-format
-             "Albums listened:\n"
+             (when (> (seq-length time-by-artist) 2)
+               (f "Top artists:\n"
+                  (f-mapconcat
+                   (f "- " (f-acc "iter->'album_artist") " ("
+                      (org-duration-from-minutes
+                       (/ (f-acc "iter->'duration") 60.0))
+                      ")")
+                   (seq-take time-by-artist deterred-mpd-max-artists))
+                  "\n\n"))
+             "Top albums:\n"
              (f-mapconcat
               (f "- " (f-acc "iter->'album") " ("
                  (org-duration-from-minutes
                   (/ (f-acc "iter->'duration") 60.0))
                  ")")
-              time-by-album)))))))
+              (seq-take time-by-album deterred-mpd-max-artists))))))))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here
