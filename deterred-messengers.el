@@ -34,6 +34,15 @@
 (require 'deterred-source)
 (require 'deterred-utils)
 
+;; Telega functions (optional dependency)
+(declare-function telega-user-get "telega-user")
+(declare-function telega-user-title "telega-user")
+(declare-function telega-chat-get "telega-chat")
+(declare-function telega-chat-title "telega-chat")
+(declare-function telega--searchChatMessages "telega-tdlib")
+(declare-function telega--getChats "telega-tdlib")
+(defvar telega--me-id)
+
 (defconst deterred-messengers-uuid-namespace
   "d9536b80-3213-4321-b37f-ebf1b558a530")
 
@@ -594,7 +603,8 @@ end timestamp."
 Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load Telegram JSON" deterred-messengers-load-telegram-json nil)
-     ("Load VK HTML" deterred-messengers-load-vk-html nil))
+     ("Load VK HTML" deterred-messengers-load-vk-html nil)
+     ("Load Telega" deterred-messengers-load-telega nil))
    callback))
 
 (cl-defmethod deterred-source-range-summary
@@ -872,6 +882,244 @@ interactively where it will prompt for user selection."
        '(messenger_chat messenger_user messenger_message))
 
       (message "Successfully merged users"))))
+
+(defun deterred-messengers--telega-get-message-text (msg)
+  "Extract text content from telega MSG.
+
+Returns the message text or empty string if no text content."
+  (let* ((content (plist-get msg :content))
+         (text-obj (or (plist-get content :text)
+                       (plist-get content :caption))))
+    (if (and text-obj (plist-get text-obj :text))
+        ;; text-obj is a formattedText object, extract :text field
+        (plist-get text-obj :text)
+      ;; Fallback to empty string
+      "")))
+
+(defun deterred-messengers--telega-get-sender-info (msg)
+  "Get sender ID and name from telega MSG.
+
+Returns (sender-id . sender-name)."
+  (let* ((sender (plist-get msg :sender_id))
+         (sender-type (plist-get sender :@type)))
+    (pcase sender-type
+      ("messageSenderUser"
+       (let* ((user-id (plist-get sender :user_id))
+              (user (telega-user-get user-id)))
+         (cons user-id
+               (or (telega-user-title user 'full-name t)
+                   (format "User %d" user-id)))))
+      ("messageSenderChat"
+       (let* ((chat-id (plist-get sender :chat_id))
+              (chat (telega-chat-get chat-id)))
+         (cons chat-id
+               (or (telega-chat-title chat)
+                   (format "Chat %d" chat-id)))))
+      (_ (cons 0 "Unknown")))))
+
+(defun deterred-messengers--telega-process-messages (chat user-cache chat-cache start-timestamp)
+  "Process messages from telega CHAT starting from START-TIMESTAMP.
+
+USER-CACHE and CHAT-CACHE are hash tables from
+`deterred-messengers--load-users-by-messenger' and
+`deterred-messengers--load-chats-by-messenger'.
+
+Returns an alist with keys:
+- users - hash table of user alists (keyed by user UUID)
+- chats - hash table of chat alists (keyed by chat UUID)
+- messages - list of message alists for database insertion."
+  (let* ((chat-type-obj (plist-get chat :type))
+         (chat-type (plist-get chat-type-obj :@type))
+         (telegram-chat-id (plist-get chat :id))
+         (type (pcase chat-type
+                 ("chatTypePrivate" "personal_chat")
+                 ("chatTypeSecret" "personal_chat")
+                 (_ "group")))
+         (found-users (make-hash-table :test #'equal))
+         (found-chats (make-hash-table :test #'equal))
+         messages
+         target-user-id
+         chat-title
+         (my-user-id (plist-get telega--me-id :user_id)))
+
+    ;; For personal chats, get the other user from chat structure
+    (if (equal type "personal_chat")
+        (let* ((other-user-id (plist-get chat-type-obj :user_id))
+               (other-user (when other-user-id (telega-user-get other-user-id)))
+               (other-user-name (when other-user
+                                  (telega-user-title other-user 'full-name t))))
+          (when other-user-id
+            (let ((user-data (deterred-messengers--get-or-create-user
+                             user-cache "telegram" other-user-id
+                             (or other-user-name (format "User %d" other-user-id)))))
+              (setq target-user-id (alist-get 'id user-data))
+              (setq chat-title (or other-user-name (format "User %d" other-user-id)))
+              (puthash target-user-id user-data found-users))))
+      ;; For group chats, use the chat title
+      (setq chat-title (telega-chat-title chat)))
+
+    ;; Get messages synchronously
+    (let ((msgs nil)
+          (from-msg-id 0))
+      (while (progn
+               (let ((result (telega--searchChatMessages
+                                 chat
+                                 '(:@type "searchMessagesFilterEmpty")
+                                 from-msg-id
+                                 0
+                               :limit 100)))
+                 (when result
+                   (let ((batch-msgs (append (plist-get result :messages) nil)))
+                     (when batch-msgs
+                       (setq from-msg-id (plist-get (car (last batch-msgs)) :id))
+                       (setq msgs (append msgs batch-msgs))
+                       ;; Check if oldest message is still after start-timestamp
+                       (> (plist-get (car (last batch-msgs)) :date) start-timestamp)))))))
+
+      ;; Filter messages by timestamp and process them
+      (dolist (msg (seq-filter (lambda (m) (>= (plist-get m :date) start-timestamp)) msgs))
+        (let* ((sender-info (deterred-messengers--telega-get-sender-info msg))
+               (sender-telegram-id (car sender-info))
+               (sender-name (cdr sender-info))
+               (user-data (deterred-messengers--get-or-create-user
+                           user-cache "telegram" sender-telegram-id sender-name))
+               (sender-uuid (alist-get 'id user-data))
+               (timestamp (plist-get msg :date))
+               (msg-id (deterred-messengers--id
+                        "telegram" telegram-chat-id (plist-get msg :id)))
+               (telegram-msg-id (plist-get msg :id))
+               (content (deterred-messengers--telega-get-message-text msg))
+               (is-attachment (if (plist-get (plist-get msg :content) :@type) 1 0))
+               (is-outgoing (equal my-user-id sender-telegram-id)))
+
+          ;; Store user
+          (puthash sender-uuid user-data found-users)
+
+          ;; Add message
+          (push `((id . ,msg-id)
+                  (telegram_id . ,telegram-msg-id)
+                  (sender_id . ,sender-uuid)
+                  (chat_id . ,nil)
+                  (content . ,content)
+                  (timestamp . ,timestamp)
+                  (is_attachment . ,is-attachment)
+                  (messenger . "telegram"))
+                messages))))
+
+    (when (> (seq-length messages) 0)
+      ;; Create chat
+      (let* ((chat-data (deterred-messengers--get-or-create-chat
+                         chat-cache "telegram" telegram-chat-id
+                         chat-title type target-user-id))
+             (chat-uuid (alist-get 'id chat-data)))
+        (puthash chat-uuid chat-data found-chats)
+
+        ;; Update message chat_ids
+        (setq messages
+              (mapcar (lambda (msg)
+                        (setf (alist-get 'chat_id msg) chat-uuid)
+                        msg)
+                      messages))
+        `((users . ,found-users)
+          (chats . ,found-chats)
+          (messages . ,messages))))))
+
+(defun deterred-messengers--telega-parse-data (&optional start-date)
+  "Parse telega data and return it in deterred-messengers format.
+
+START-DATE is a UNIX timestamp.  If nil, parses all messages.
+
+Returns an alist with keys:
+- users - list of user alists
+- chats - list of chat alists
+- messages - list of message alists."
+  (unless telega--me-id
+    (user-error "Telega is not initialized.  Please start telega first"))
+
+  (let* ((db (deterred-db--init))
+         (start-timestamp (or start-date 0))
+         (user-cache (deterred-messengers--load-users-by-messenger db "telegram"))
+         (chat-cache (deterred-messengers--load-chats-by-messenger db "telegram"))
+         (all-users-ht (make-hash-table :test #'equal))
+         (all-chats-ht (make-hash-table :test #'equal))
+         all-messages
+         (chats (telega--getChats '(:@type "chatListMain"))))
+
+    (message "Processing %d chats from telega..." (length chats))
+
+    (cl-loop for chat in chats
+             for i from 1
+             for result = (deterred-messengers--telega-process-messages
+                           chat user-cache chat-cache start-timestamp)
+             when result
+             do (progn
+                  (deterred-utils-merge-hashes all-users-ht (alist-get 'users result))
+                  (deterred-utils-merge-hashes all-chats-ht (alist-get 'chats result))
+                  (push (alist-get 'messages result) all-messages))
+             do (when (= (% i 10) 0)
+                  (message "Processed %d/%d chats..." i (length chats))))
+
+    `((users . ,(hash-table-values all-users-ht))
+      (chats . ,(hash-table-values all-chats-ht))
+      (messages . ,(apply #'append all-messages)))))
+
+(defun deterred-messengers-load-telega ()
+  "Load telega data into DETERRED.
+
+Imports messages starting from the last imported date minus 1 day,
+or all messages if this is the first import."
+  (interactive)
+  (unless (featurep 'telega)
+    (user-error "Telega is not loaded.  Please load telega.el first"))
+
+  (let* ((db (deterred-db--init))
+         ;; Get last imported timestamp for telegram, minus 1 day for safety
+         (last-timestamp (caar (sqlite-select
+                                db "SELECT MAX(timestamp) FROM messenger_message
+                                   WHERE messenger = 'telegram'")))
+         (start-date (if last-timestamp
+                         (- last-timestamp (* 24 60 60))  ; 1 day before last import
+                       nil)))  ; nil means import all
+
+    (message "Parsing telega data%s..."
+             (if start-date
+                 (format " from %s" (format-time-string "%Y-%m-%d" start-date))
+               " (all messages)"))
+
+    (let ((data (deterred-messengers--telega-parse-data start-date)))
+      (with-sqlite-transaction db
+        (let ((users (alist-get 'users data))
+              (chats (alist-get 'chats data))
+              (messages (alist-get 'messages data)))
+
+          (message "Importing %d users, %d chats, %d messages..."
+                   (length users) (length chats) (length messages))
+
+          (when users
+            (deterred-db-insert-unsafe
+             db :table-name 'messenger_user
+             :values users
+             :conflict-action 'do-update
+             :conflict-attrs '(id)))
+          (when chats
+            (deterred-db-insert-unsafe
+             db :table-name 'messenger_chat
+             :values chats
+             :attrs '(id telegram_id name type target_user_id vk_id)
+             :conflict-action 'do-update
+             :conflict-attrs '(id)))
+          (when messages
+            (deterred-db-insert-unsafe
+             db :table-name 'messenger_message
+             :values messages
+             :conflict-action 'do-update
+             :conflict-attrs '(id)))
+
+          (deterred-db-mark-updated-batch
+           db
+           '(messenger_chat messenger_user messenger_message))
+
+          (message "Successfully imported telega data: %d messages" (length messages)))))))
 
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
