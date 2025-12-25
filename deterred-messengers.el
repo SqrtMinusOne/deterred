@@ -626,7 +626,7 @@ DB is the sqlite database object."
               LEFT JOIN messenger_user mu ON mu.id = mc.target_user_id
               WHERE mm.\"timestamp\" BETWEEN ? AND ?
               GROUP BY mc.id, mc.name, mc.\"type\"
-              HAVING sum(CASE WHEN mm.sender_id = ? THEN 1 ELSE 0 END) > 0
+              HAVING sum(CASE WHEN mm.sender_id = ? THEN 1 ELSE 0 END) > 0 OR MC.\"type\" = \"personal_chat\"
               ORDER BY mc.\"type\", sent DESC"
            (list deterred-messengers-my-id deterred-messengers-my-id
                  start end

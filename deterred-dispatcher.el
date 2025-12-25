@@ -238,7 +238,7 @@ given timestamp."
      deterred-sources)
     (setf (alist-get :description datum)
           (format-time-string deterred-dispatcher-date-format timestamp))
-    datum))
+    (nreverse datum)))
 
 (defun deterred-dispatcher--render-items (datum section-type section-value)
   "Render items from DATUM.
@@ -400,7 +400,7 @@ DB is the SQLite connection object."
       (magit-insert-heading)
       (cl-loop
        for (timestamp . datum) in data
-       do (deterred-dispatcher--render-timestamp timestamp datum)))))
+       do (deterred-dispatcher--render-timestamp timestamp (reverse datum))))))
 
 (defun deterred-dispatcher--render-actions ()
   "Render the \"Actions\" section for DETERRED."

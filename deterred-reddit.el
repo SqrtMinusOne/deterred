@@ -166,7 +166,7 @@ DB is the sqlite database object."
                  " and ")
                (f (f-num (seq-length comments)) " comments"
                   (if (> (seq-length comment-subreddits) 2)
-                      (f " on " (seq-length comment-subreddits) " subreddits")
+                      (f " on " (f-num (seq-length comment-subreddits)) " subreddits")
                     (f " on " (f-join comment-subreddits ", ")))))))
         (:long-description-fn
          . ,(lambda (&rest _) (deterred-reddit--render-data posts comments)))))))

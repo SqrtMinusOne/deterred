@@ -124,7 +124,7 @@ See `deterred-source-range-summary' for the description.")
 SOURCE is a `deterred-source' instance.  TIMESTAMP has to be rounded
 to the start of day, e.g. use `deterred-utils-ts-to-day-start'.  DB is
 a SQLite connection objects."
-  (deterred-source-range-summary source timestamp (+ (* 60 60 24) timestamp) db))
+  (deterred-source-range-summary source timestamp (+ (* 60 60 24) (- 1) timestamp) db))
 
 (defun deterred-source--actions-pick (action-table &optional callback)
   "Prompt the user with ACTION-TABLE and execute the pick.

@@ -850,9 +850,10 @@ DB is the sqlite database object."
               0))
          (app-data
           (deterred-db-select-template-alist
-           db "SELECT app, total_duration / 60 total
+           db "SELECT app, sum(total_duration) / 60 total
                FROM activitywatch_currentwindow_agg
                WHERE day >= :start-day AND day <= :end-day
+               GROUP BY app
                ORDER BY total DESC
                LIMIT :top"
            `((:start-day . ,start-day) (:end-day . ,end-day)

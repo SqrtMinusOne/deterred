@@ -28,6 +28,7 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-format)
+(require 'magit-section)
 (require 'uuidgen)
 (require 'cl-lib)
 
