@@ -237,7 +237,7 @@ No idea what I'm doing wrong, but this seems to help."
             (insert " ")
             (widget-create 'push-button
                            :notify (lambda (&rest _)
-                                     (condition-case err
+                                     (condition-case-unless-debug err
                                          (progn
                                            (funcall action-fn)
                                            (deterred-dispatcher-refresh))

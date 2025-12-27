@@ -862,7 +862,8 @@ DB is the sqlite database object."
           (deterred-db-select-template-alist
            db "SELECT hostname, sum(total_duration) / 60 total
                FROM activitywatch_currentwindow_agg
-               WHERE day >= :start-day AND day <= :end-day"
+               WHERE day >= :start-day AND day <= :end-day
+               GROUP BY hostname"
            `((:start-day . ,start-day) (:end-day . ,end-day)))))
     (when (> total-minutes 0)
       `((:short-description

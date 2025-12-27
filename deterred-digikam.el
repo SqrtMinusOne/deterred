@@ -158,6 +158,7 @@ Uses `deterred-locations-locate-at' to determine location from timestamp."
          :values photos
          :conflict-attrs '(id)
          :conflict-action 'do-update)
+        (deterred-db-mark-updated db "digikam_photo")
         (message "Location inference complete")))))
 
 (defun deterred-digikam-load (file)

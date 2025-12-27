@@ -56,7 +56,8 @@
   (deterred-db-insert-unsafe
    db :table-name 'location_times
    :values `(((location_id . ,location-id)
-              (timestamp . ,timestamp)))))
+              (timestamp . ,timestamp))))
+  (deterred-db-mark-updated db "location_times"))
 
 (defun deterred-locations--dst-offset-hours (timestamp dst-mode)
   "Calculate DST offset at TIMESTAMP.

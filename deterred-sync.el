@@ -23,14 +23,62 @@
 
 ;;; Commentary:
 
-;; The sync
-
-;; Strategies:
-;; - Replace (use row count)
-;; - Replace (use last timestamp)?
-;; - Merge by hostname + timestamp attribute (use last timestamp)
-;; - Merge by key attributes (use meta_table_updates)
-;; Also check if saved row count matches the synced one.
+;; Sync functionality for DETERRED.
+;;
+;; In a general case, syncing two databases is more complicated, but
+;; this works given the specific needs of the package, albeit
+;; imperfectly.
+;;
+;; The sync works in two directions:
+;; - Current to others - by copying the current database into
+;;   `deterred-sync-location' (`deterred-sync--execute-current')
+;; - Others to current - by copying data from other databases in
+;;   `deterred-sync-location' into the current one
+;;   (`deterred-sync--execute-other')
+;;
+;; `deterred-sync-state' returns the list of known databases, and
+;; `deterred-sync-get-action' returns the data on which action to
+;; apply to which database.
+;;
+;; Naturally, the second flow (others to current) is more complicated.
+;; The sync is implemented table-by-table, where each table is
+;; processed by a particular strategy.  Some strategies process tables
+;; in bulk.  The available strategies are listed in
+;; `deterred-sync-strategies', and the order of application is listed
+;; in `deterred-sync-config'.
+;;
+;; The strategies are as follows:
+;; - `deterred-sync--replace' - replace the current table with other
+;;   if its row count if higher.
+;; - `deterred-sync--merge-keys' - merge the two tables by key
+;;   attributes.
+;; - `deterred-sync--merge-hostname' - add records from the other
+;;   table to the current by using a hostname attribute and a
+;;   timestamp attribute.
+;;
+;; Each strategy has its purpose.  The replace strategy only works if
+;; a table is filled from a datasource outside the machine, e.g. as it
+;; is with `deterred-wakatime', and if the records are never deleted.
+;; That way it is guaranteed that the table with most records will be
+;; most accurate.
+;;
+;; Otherwise, e.g. if the table is edited on two machines, one of the
+;; edits will be lost.
+;;
+;; The merge-keys strategy preserves all edits, but it's expensive,
+;; disallows row deletion and only syncs edits from NULL to not-NULL
+;; values.  I might add an updated_at attribute to sync edits better,
+;; but so far it's not there.
+;;
+;; The merge-hostname is less expensive than merge-keys because it
+;; only syncs missing records (i.e. ones later than the latest
+;; timestamp in the current database), but it doesn't sync edits.
+;;
+;; Each strategy has to accept the following arguments:
+;; - `:table-name' or `:table-names' (in order to run
+;;   `deterred-sync-strategy-sanity-check')
+;; - `:dry-run'.  If non-nil, only print the actions to be done into a
+;;   buffer.
 
 ;;; Code:
 (require 'deterred-db)
@@ -39,6 +87,65 @@
   "The path to where sync DB snapshots are stored.  Change this."
   :group 'deterred
   :type 'string)
+
+(defconst deterred-sync-config
+  '(;; `deterred-activitywatch'
+    (merge-hostname :table-name activitywatch_currentwindow_agg
+                    :timestamp-attr day)
+    (merge-hostname :table-name activitywatch_notafk_period
+                    :timestamp-attr notafk_start_timestamp)
+    ;; `deterred-digikam'
+    (replace :table-names (digikam_photo digikam_album))
+    ;; `deterred-habits'
+    (replace :table-names (habit_record))
+    ;; `deterred-locations'
+    (merge-keys :table-name location)
+    (merge-keys :table-name location_static_hostnames
+                :key-attrs (hostname))
+    ;; A choice is either to break adding new entries on two machines
+    ;; (with replace) or to break deleting them (with merge-keys).  I
+    ;; choose the former.
+    (replace :table-names (location_times))
+    ;; `deterred-mastodon'
+    (replace :table-names (mastodon_post_mention mastodon_post mastodon_account))
+    ;; `deterred-messengers'
+    (merge-keys :table-name messenger_user)
+    (merge-keys :table-name messenger_chat)
+    (merge-keys :table-name messenger_message)
+    ;; `deterred-mpd'
+    (merge-keys :table-name mpd_song)
+    (merge-keys :table-name mpd_song_listened :key-attrs (mpd_song_id timestamp))
+    ;; `deterred-org-journal-tags'
+    (replace :table-names (org_journal_record_tag org_journal_tag org_journal_record))
+    ;; `deterred-podcasts'
+    (replace :table-names (podcasts_listened podcasts_feed))
+    ;; `deterred-read-it-later'
+    (replace :table-names (read_it_later_article read_it_later_host))
+    ;; `deterred-reddit'
+    (replace :table-names (reddit_comment reddit_post))
+    ;; `deterred-wakatime'
+    (replace :table-names (
+                           wakatime_branches wakatime_categories wakatime_editors
+                           wakatime_entities wakatime_grand_total wakatime_languages
+                           wakatime_machines wakatime_operating_systems
+                           wakatime_projects)))
+  "The order of sync strategy application for DETERRED.
+
+This is a list.  In each element, the first item is a strategy name
+\(which `deterred-sync-strategies' maps to functions) and the
+remaining elements are the arguments in the form of plist.  The
+argument list must have either a `:table-name' or `:table-names'
+key (in order to run `deterred-sync-strategy-sanity-check').
+
+See the comments in the `deterred-sync' package for more detail.")
+
+(defconst deterred-sync-strategies
+  '((merge-hostname . deterred-sync--merge-hostname)
+    (replace . deterred-sync--replace)
+    (merge-keys . deterred-sync--merge-keys))
+  "An alist mapping DETERRED sync stragey names to functions.
+
+See the comments in the `deterred-sync' package for more detail.")
 
 (defun deterred-sync--get-file-name (hostname)
   "Get path to a database from HOSTNAME in the sync directory."
@@ -50,12 +157,11 @@
 (defun deterred-sync-state ()
   "Return the current DETERRED sync state.
 
-The state is a list of alist with the following keys:
+The return value is a list of alist with the following keys:
 - hostname
 - current - if t, the entry corresponds to the current hostname
 - db-time
 - file-time"
-
   (let* ((files-data
           (mapcar
            (lambda (f)
@@ -99,12 +205,6 @@ The state is a list of alist with the following keys:
              (file-time . ,(alist-get h files-data nil nil #'equal))
              (db-time . ,(alist-get h db-data nil nil #'equal))))
          all-hostnames-except-current))))
-
-(defun deterred-sync--execute-current ()
-  "Copy the current database to the sync location."
-  (copy-file deterred-db-location
-             (deterred-sync--get-file-name (system-name))
-             t t t t))
 
 (defun deterred-sync-get-action (entry)
   "Get sync action for ENTRY.
@@ -150,7 +250,11 @@ Abnormal conditions:
               (< (or (alist-get 'db-time entry) 0)
                  (or (alist-get 'file-time entry) 0)))
          `((state . pending)
-           (action . ,(lambda () (message "TODO")))))
+           (action
+            . ,(lambda ()
+                 (deterred-sync--execute-other
+                  (alist-get 'hostname entry)
+                  (eq current-prefix-arg '(4)))))))
         ;; 4
         ((and (alist-get 'current entry)
               (< (alist-get 'db-time entry)
@@ -167,6 +271,232 @@ Abnormal conditions:
            (action
             . ,(lambda ()
                  (user-error "The current database may have a more relevant copy than its target in the sync directory")))))))
+
+(defun deterred-sync--execute-current ()
+  "Copy the current database to the sync location."
+  (copy-file deterred-db-location
+             (deterred-sync--get-file-name (system-name))
+             t t t t))
+
+(defun deterred-sync--execute-other (hostname dry-run)
+  "Sync data from HOSTNAME database into the current database.
+
+If DRY-RUN is non-nil, only print the actions to be done into a
+buffer without executing them."
+  (let* ((db (deterred-db--init))
+         (db-other-path (deterred-sync--get-file-name hostname))
+         (file-time (time-convert
+                     (file-attribute-modification-time
+                      (file-attributes db-other-path))
+                     'integer))
+         (log-buffer (get-buffer-create
+                      (format "*deterred-sync-%s*" hostname))))
+    (with-current-buffer log-buffer
+      (erase-buffer)
+      (insert (format "Syncing %s to current database%s\n\n"
+                      hostname (if dry-run " (DRY RUN)" ""))))
+    (sqlite-execute db (format "ATTACH DATABASE '%s' AS other_db" db-other-path))
+    (unwind-protect
+        (with-sqlite-transaction db
+          (dolist (strategy-config deterred-sync-config)
+            (let* ((strategy-name (car strategy-config))
+                   (strategy-args (cdr strategy-config))
+                   (strategy-fn (alist-get strategy-name deterred-sync-strategies)))
+              (unless strategy-fn
+                (error "Unknown strategy: %s" strategy-name))
+              (with-current-buffer log-buffer
+                (insert (format "Executing strategy: %s %s\n" strategy-name strategy-args)))
+              (apply strategy-fn db
+                     (append strategy-args `(
+                                             :hostname ,hostname
+                                             :dry-run ,dry-run
+                                             :log-buffer ,log-buffer)))
+              (with-current-buffer log-buffer
+                (insert "\n"))))
+          (unless dry-run
+            (sqlite-execute
+             db
+             "INSERT INTO meta_sync_info (hostname, last_synced)
+              VALUES (?, ?)
+              ON CONFLICT (hostname)
+              DO UPDATE SET last_synced = ?"
+             (list hostname file-time file-time))))
+      (sqlite-execute db "DETACH DATABASE other_db")
+      (with-current-buffer log-buffer
+        (goto-char (point-min)))
+      (if dry-run
+          (display-buffer log-buffer)
+        (kill-buffer log-buffer)))))
+
+(cl-defun deterred-sync--replace (db &key table-names hostname dry-run log-buffer)
+  "Replace tables in DB with data from other_db if any has more rows.
+
+TABLE-NAMES is a list of table names to process.  If at least one
+table in TABLE-NAMES has more rows in other_db, all tables are
+replaced.  If DRY-RUN is non-nil, only print the actions to
+LOG-BUFFER without executing them."
+  (let (should-replace)
+    (dolist (table-name table-names)
+      (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
+             (count-current (caar (sqlite-select
+                                   db
+                                   (format "SELECT COUNT(*) FROM main.%s" table-str))))
+             (count-other (caar (sqlite-select
+                                 db
+                                 (format "SELECT COUNT(*) FROM other_db.%s" table-str)))))
+        (when log-buffer
+          (with-current-buffer log-buffer
+            (insert (format "  Table %s: current=%d, other=%d\n"
+                            table-str count-current count-other))))
+        (when (> count-other count-current)
+          (setq should-replace t))))
+    (when (and should-replace (not dry-run))
+      (dolist (table-name table-names)
+        (let ((table-str (if (symbolp table-name) (symbol-name table-name) table-name)))
+          (sqlite-execute db (format "DELETE FROM main.%s" table-str))))
+      (dolist (table-name (reverse table-names))
+        (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
+               (sample-row (car (deterred-db-select-alist
+                                 db
+                                 (format "SELECT * FROM other_db.%s LIMIT 1" table-str)))))
+          (when sample-row
+            (let* ((attrs (mapcar #'car sample-row))
+                   (attrs-str (mapconcat #'symbol-name attrs ", ")))
+              (sqlite-execute db
+                              (format "INSERT INTO main.%s (%s) SELECT %s FROM other_db.%s"
+                                      table-str attrs-str attrs-str table-str))))
+          (deterred-db-mark-updated db table-name))))))
+
+(cl-defun deterred-sync--merge-hostname
+    (db &key table-name hostname (hostname-attr 'hostname)
+         (timestamp-attr 'timestamp) dry-run log-buffer)
+  "Merge records from other_db to DB by hostname and timestamp.
+
+Only syncs missing records from HOSTNAME (ones later than or equal to
+the latest timestamp for that HOSTNAME in DB).  HOSTNAME-ATTR is the
+name of the hostname column, TIMESTAMP-ATTR is the name of the
+timestamp column.  If DRY-RUN is non-nil, only print the actions to
+LOG-BUFFER without executing them."
+  (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
+         (hostname-str (if (symbolp hostname-attr) (symbol-name hostname-attr) hostname-attr))
+         (timestamp-str (if (symbolp timestamp-attr) (symbol-name timestamp-attr) timestamp-attr))
+         (max-timestamp (caar
+                         (sqlite-select db
+                                        (format "SELECT MAX(%s) FROM main.%s WHERE %s = ?"
+                                                timestamp-str table-str hostname-str)
+                                        (list hostname))))
+         (count (caar
+                 (if max-timestamp
+                     (sqlite-select
+                      db
+                      (format "SELECT COUNT(*) FROM other_db.%s WHERE %s >= ? AND %s = ?"
+                              table-str timestamp-str hostname-str)
+                      (list max-timestamp hostname))
+                   (sqlite-select
+                    db
+                    (format "SELECT COUNT(*) FROM other_db.%s WHERE %s = ?"
+                            table-str hostname-str)
+                    (list hostname))))))
+    (when log-buffer
+      (with-current-buffer log-buffer
+        (insert (format "  Table %s: %d new records from %s\n"
+                        table-str count hostname))))
+    (when (and (> count 0) (not dry-run))
+      (let* ((sample-row (car (deterred-db-select-alist
+                               db
+                               (format "SELECT * FROM other_db.%s LIMIT 1" table-str))))
+             (attrs (mapcar #'car sample-row))
+             (attrs-str (mapconcat #'symbol-name attrs ", "))
+             (where-clause (if max-timestamp
+                               (format "WHERE %s >= %d AND %s = %s"
+                                       timestamp-str max-timestamp
+                                       hostname-str (deterred-db--escape hostname))
+                             (format "WHERE %s = %s"
+                                     hostname-str (deterred-db--escape hostname)))))
+        (sqlite-execute db
+                        (format "INSERT OR IGNORE INTO main.%s (%s) SELECT %s FROM other_db.%s %s"
+                                table-str attrs-str attrs-str table-str where-clause)))
+      (deterred-db-mark-updated db table-name))))
+
+(cl-defun deterred-sync--merge-keys (db &key table-name hostname (key-attrs '(id)) dry-run log-buffer)
+  "Merge records from other_db to DB by key attributes.
+
+For each row in other_db, insert it into DB.  On conflict with
+existing keys, update NULL values in DB with non-NULL values from
+other_db.  KEY-ATTRS specifies the key columns.  If DRY-RUN is
+non-nil, only print the actions to LOG-BUFFER without executing them."
+  (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
+         (count (caar (sqlite-select db (format "SELECT COUNT(*) FROM other_db.%s" table-str)))))
+    (when log-buffer
+      (with-current-buffer log-buffer
+        (insert (format "  Table %s: %d rows to merge\n"
+                        table-str count))))
+    (unless dry-run
+      (let* ((sample-row (car (deterred-db-select-alist
+                               db
+                               (format "SELECT * FROM other_db.%s LIMIT 1" table-str))))
+             (attrs (mapcar #'car sample-row))
+             (non-key-attrs (seq-difference attrs key-attrs))
+             (key-attrs-str (mapconcat #'symbol-name key-attrs ", "))
+             (attrs-str (mapconcat #'symbol-name attrs ", "))
+             (update-clauses
+              (mapconcat (lambda (attr)
+                           (let ((attr-str (symbol-name attr)))
+                             (format "%s = COALESCE(%s.%s, excluded.%s)"
+                                     attr-str table-str attr-str attr-str)))
+                         non-key-attrs ", "))
+             (query (format "INSERT INTO main.%s (%s) SELECT %s FROM other_db.%s WHERE true ON CONFLICT (%s) DO UPDATE SET %s"
+                            table-str attrs-str attrs-str table-str key-attrs-str update-clauses)))
+        (sqlite-execute db query))
+      (deterred-db-mark-updated db table-name))))
+
+(defun deterred-sync-config-sanity-check ()
+  "Sanity check for DETERRED sync.
+
+Checks if:
+- All tables (except for meta_*) have a sync strategy that covers
+  them
+- The sync config (`deterred-sync-config' doesn't have any extra
+  tables."
+  (interactive)
+  (let* ((db (deterred-db--init))
+         (all-tables
+          (mapcar #'car
+                  (sqlite-select
+                   db
+                   "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'meta_%'")))
+         (config-tables
+          (seq-uniq
+           (apply #'append
+                  (mapcar (lambda (config)
+                            (let ((plist (cdr config)))
+                              (cond ((plist-get plist :table-name)
+                                     (list (symbol-name (plist-get plist :table-name))))
+                                    ((plist-get plist :table-names)
+                                     (mapcar #'symbol-name (plist-get plist :table-names)))
+                                    (t nil))))
+                          deterred-sync-config))))
+         (missing-in-config (seq-difference all-tables config-tables #'equal))
+         (extra-in-config (seq-difference config-tables all-tables #'equal))
+         (buffer (get-buffer-create "*deterred-sync-sanity-check*")))
+    (with-current-buffer buffer
+      (erase-buffer)
+      (insert "DETERRED Sync Configuration Sanity Check\n")
+      (insert "=========================================\n\n")
+      (if (and (null missing-in-config) (null extra-in-config))
+          (insert "All checks passed!\n")
+        (when missing-in-config
+          (insert "Tables missing in sync config:\n")
+          (dolist (table missing-in-config)
+            (insert (format "  - %s\n" table)))
+          (insert "\n"))
+        (when extra-in-config
+          (insert "Tables in sync config but not in database:\n")
+          (dolist (table extra-in-config)
+            (insert (format "  - %s\n" table)))
+          (insert "\n")))
+      (goto-char (point-min)))
+    (display-buffer buffer)))
 
 (provide 'deterred-sync)
 ;;; deterred-sync.el ends here

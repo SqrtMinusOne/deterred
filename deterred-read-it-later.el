@@ -268,7 +268,8 @@ read_it_later_article table."
        :table-name 'read_it_later_article
        :values results
        :conflict-action 'do-nothing)
-      (deterred-db-mark-updated db 'read_it_later_article))))
+      (deterred-db-mark-updated-batch
+       db '(read_it_later_article read_it_later_host)))))
 
 (defun deterred-read-it-later--get-start-timestamp (provider)
   "Get last timestamp saved for PROVIDER."

@@ -100,7 +100,8 @@ The return value is a list of alists with the following keys:
         (deterred-db-insert-unsafe
          db :table-name 'habit_record
          :values (deterred-habits--parse-buffer)
-         :conflict-action 'do-nothing)))))
+         :conflict-action 'do-nothing)
+        (deterred-db-mark-updated db "habit_record")))))
 
 ;;;###autoload
 (defclass deterred-habits (deterred-source)
