@@ -132,24 +132,28 @@ No idea what I'm doing wrong, but this seems to help."
                (warn-days (oref source warn-days))
                (unsynced-days (floor
                                (/ (float (- (time-convert nil 'integer)
-                                            (cdr range)))
+                                            (or (cdr range) 0)))
                                   (* 60 60 24)))))
           (insert
            (format "%s  %s - %s"
                    (propertize
                     (string-pad (oref source name) max-name-length)
                     'face 'deterred-faces-source-name)
-                   (propertize
-                    (format-time-string deterred-dispatcher-short-date-format
-                                        (car range))
-                    'face 'deterred-faces-date)
-                   (propertize
-                    (format-time-string deterred-dispatcher-short-date-format
-                                        (cdr range))
-                    'face (if (or (null warn-days)
-                                  (> warn-days unsynced-days))
-                              'deterred-faces-date
-                            'warning))))
+                   (if (car range)
+                       (propertize
+                        (format-time-string deterred-dispatcher-short-date-format
+                                            (car range))
+                        'face 'deterred-faces-date)
+                     (propertize "(empty)   " 'face 'deterred-faces-info))
+                   (if (cdr range)
+                       (propertize
+                        (format-time-string deterred-dispatcher-short-date-format
+                                            (cdr range))
+                        'face (if (or (null warn-days)
+                                      (> warn-days unsynced-days))
+                                  'deterred-faces-date
+                                'warning))
+                     (propertize "(empty)   " 'face 'deterred-faces-info))))
           (when can-sync
             (insert " ")
             (widget-create 'push-button

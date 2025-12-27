@@ -111,7 +111,8 @@ The return value is an alist with the following keys:
                    ORDER BY lt.timestamp DESC LIMIT 1"
                         (list timestamp)))))
     (unless raw-data
-      (error "No location data found for timestamp %s" timestamp))
+      (error "No location data found for timestamp %s"
+             (format-time-string "%F" timestamp)))
     (let* ((data (deterred-db-list-to-alist raw-data '(id name lat lon timezone dst-mode)))
            (dst-hours (deterred-locations--dst-offset-hours
                        timestamp (alist-get 'dst-mode data))))
