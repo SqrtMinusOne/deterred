@@ -32,6 +32,7 @@
 (require 'org)
 
 (require 'deterred-db)
+(require 'deterred-sync)
 (require 'deterred-dashboard)
 (require 'deterred-faces)
 (require 'deterred-source)
@@ -171,6 +172,78 @@ No idea what I'm doing wrong, but this seems to help."
                                                  (oref source name))
                                         (deterred-dispatcher-refresh))))
                            "[Actions...]"))
+          (insert "\n"))))))
+
+(defun deterred-dispatcher--render-sync-state ()
+  "Render sync state section for `deterred-dispatcher'."
+  (magit-insert-section (deterred-info-sync-state)
+    (insert (propertize "Sync state" 'face 'deterred-faces-section-heading-1))
+    (magit-insert-heading)
+    (let* ((state (deterred-sync-state))
+           (max-hostname-length
+            (seq-max (append
+                      (mapcar (lambda (entry)
+                                (+ (length (alist-get 'hostname entry))
+                                   (if (alist-get 'current entry) 10 0)))
+                              state)
+                      '(0))))
+           (date-format-length (length (format-time-string
+                                        deterred-dispatcher-short-date-format)))
+           (max-db-length (max date-format-length 3))
+           (max-file-length (max date-format-length 3))
+           (max-status-length 9))
+      (dolist (entry state)
+        (let* ((hostname (alist-get 'hostname entry))
+               (is-current (alist-get 'current entry))
+               (db-time (alist-get 'db-time entry))
+               (file-time (alist-get 'file-time entry))
+               (action-info (deterred-sync-get-action entry))
+               (action-state (alist-get 'state action-info))
+               (action-fn (alist-get 'action action-info))
+               (hostname-str hostname)
+               (db-str (if db-time
+                           (format-time-string deterred-dispatcher-short-date-format db-time)
+                         "N/A"))
+               (file-str (if file-time
+                             (format-time-string deterred-dispatcher-short-date-format file-time)
+                           "N/A"))
+               (status-str (pcase action-state
+                             ('ok "[OK]")
+                             ('pending "[PENDING]")
+                             ('error "[ERROR]")
+                             (_ "[UNKNOWN]"))))
+          (insert
+           (deterred-format
+            (string-pad
+             (f
+              (f-ace hostname-str 'deterred-faces-source-name)
+              (when is-current
+                (f (f-ace " (current)" 'bold))))
+             max-hostname-length)
+            "  DB: "
+            (f-ace (string-pad db-str max-db-length)
+                   (if db-time 'deterred-faces-date 'shadow))
+            "  File: "
+            (f-ace (string-pad file-str max-file-length)
+                   (if file-time 'deterred-faces-date 'shadow))
+            "  "
+            (f-ace (string-pad status-str max-status-length)
+                   (pcase action-state
+                     ('ok 'success)
+                     ('pending 'warning)
+                     ('error 'error)
+                     (_ 'shadow)))))
+          (when (and action-fn (memq action-state '(pending error)))
+            (insert " ")
+            (widget-create 'push-button
+                           :notify (lambda (&rest _)
+                                     (condition-case err
+                                         (progn
+                                           (funcall action-fn)
+                                           (deterred-dispatcher-refresh))
+                                       (error (message "Sync action error: %s"
+                                                       (error-message-string err)))))
+                           "[Execute]"))
           (insert "\n"))))))
 
 (defun deterred-dispatcher--on-this-day-data (&optional db)
@@ -446,6 +519,8 @@ DB is the SQLite connection object."
       (deterred-dispatcher--render-actions)
       (insert "\n\n")
       (deterred-dispatcher--render-sources)
+      (insert "\n\n")
+      (deterred-dispatcher--render-sync-state)
       (insert "\n\n")
       (deterred-dispatcher--render-on-this-day)
       (let ((magit-section-cache-visibility nil))

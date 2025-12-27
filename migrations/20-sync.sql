@@ -1,0 +1,4 @@
+CREATE TABLE meta_sync_info (
+  hostname TEXT PRIMARY KEY,
+  last_synced INTEGER NOT NULL DEFAULT CURRENT_TIMESTAMP
+) STRICT;
