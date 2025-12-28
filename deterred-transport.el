@@ -256,6 +256,94 @@ Return a list of trips as alists."
       (deterred-db-mark-updated-batch db '("transport_trips"))
       (message "Imported %d trips from PDF" (length trips)))))
 
+(defun deterred-transport-yandex-taxi--transform-order (order)
+  "Transform a single Yandex Taxi ORDER to database format.
+
+ORDER is an alist parsed from JSON.
+
+Return an alist with keys: id, source, timestamp, transport, route, cost."
+  (let* ((data (alist-get 'data order))
+         (timestamp (time-convert
+                     (encode-time (iso8601-parse (alist-get 'created_at data)))
+                     'integer))
+         (route (format "%s → %s"
+                        (alist-get 'source (alist-get 'route data))
+                        (alist-get 'destination (alist-get 'route data))))
+         (cost (alist-get 'parsedValue (alist-get 'cost (alist-get 'payment data))))
+         (id (uuidgen-3 deterred-transport-uuid-namespace
+                        (format "%s-yandex-taxi" timestamp))))
+    `((id . ,id)
+      (source . "yandex-taxi")
+      (timestamp . ,timestamp)
+      (transport . "Taxi")
+      (route . ,route)
+      (cost . ,cost))))
+
+(defun deterred-transport-yandex-taxi-import (source)
+  "Import Yandex Taxi orders from JSON SOURCE into DETERRED.
+
+SOURCE can be:
+- A file path (JSON file)
+- The symbol 'clipboard (to read from clipboard)
+
+The JSON should be the response from /orderhistory/v2/list endpoint."
+  (interactive
+   (list
+    (if (y-or-n-p "Import from clipboard? ")
+        'clipboard
+      (expand-file-name
+       (read-file-name "Yandex Taxi JSON file: " nil nil t nil
+                       (lambda (f)
+                         (or (file-directory-p f)
+                             (string-match-p (rx ".json" eos) f))))))))
+  (let* ((db (deterred-db--init))
+         (json-data (if (eq source 'clipboard)
+                        (with-temp-buffer
+                          (insert (current-kill 0))
+                          (goto-char (point-min))
+                          (json-read))
+                      (with-temp-buffer
+                        (insert-file-contents source)
+                        (goto-char (point-min))
+                        (json-read))))
+         (orders-vec (alist-get 'orders json-data))
+         (orders (append orders-vec nil))  ; Convert vector to list
+         (trips (mapcar #'deterred-transport-yandex-taxi--transform-order orders)))
+    (with-sqlite-transaction db
+      (when trips
+        (deterred-db-insert-unsafe
+         db
+         :table-name 'transport_trips
+         :values trips
+         :attrs '(id source timestamp transport route cost)
+         :conflict-action 'do-nothing))
+      (deterred-db-mark-updated-batch db '("transport_trips"))
+      (message "Imported %d Yandex Taxi trips" (length trips)))))
+
+(defun deterred-transport-yandex-taxi-fetch ()
+  "Open Yandex Taxi website with instructions to copy order history.
+
+This function will:
+1. Open the Yandex Taxi website in your browser
+2. Display instructions for copying the JSON response
+
+To get the data:
+1. Open browser DevTools (F12)
+2. Go to the Network tab
+3. Navigate to order history on the website
+4. Find the request to '/orderhistory/v2/list'
+5. Click on it and go to the Response tab
+6. Copy the entire JSON response
+7. Run `deterred-transport-yandex-taxi-import' and paste from clipboard."
+  (interactive)
+  (browse-url "https://taxi.yandex.ru/ru_ru/")
+  (message "Browser opened. Please:
+1. Open DevTools (F12) → Network tab
+2. Navigate to order history
+3. Find '/orderhistory/v2/list' request
+4. Copy the Response JSON
+5. Run M-x deterred-transport-yandex-taxi-import"))
+
 (defun deterred-transport-purge ()
   "Clear all transport data from the DETERRED database."
   (interactive)
@@ -314,6 +402,8 @@ Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load podorozhnik PDF" deterred-transport-load-pdf nil)
      ("Sync podorozhnik trips" deterred-transport-podorozhnik-sync nil)
+     ("Yandex Taxi: Open website + instructions" deterred-transport-yandex-taxi-fetch nil)
+     ("Yandex Taxi: Import JSON" deterred-transport-yandex-taxi-import nil)
      ("Purge transport data" deterred-transport-purge nil))
    callback))
 
