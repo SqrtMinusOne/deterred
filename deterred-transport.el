@@ -56,63 +56,63 @@
     ("Метро" . "Metro"))
   "Mapping from Russian vehicle type names to English names.")
 
-(defcustom deterred-transport-api-endpoint "https://podorozhnik.spb.ru/api/"
+(defcustom deterred-transport-podorozhnik-api-endpoint "https://podorozhnik.spb.ru/api/"
   "API endpoint for Podorozhnik."
   :group 'deterred-sources
   :type 'string)
 
-(defcustom deterred-transport-login nil
+(defcustom deterred-transport-podorozhnik-login nil
   "Login (email) for Podorozhnik."
   :group 'deterred-sources
   :type 'string)
 
-(defcustom deterred-transport-password nil
+(defcustom deterred-transport-podorozhnik-password nil
   "Password for Podorozhnik."
   :group 'deterred-sources
   :type 'string)
 
-(defcustom deterred-transport-page-size 100
+(defcustom deterred-transport-podorozhnik-page-size 100
   "Number of trips to fetch per page."
   :group 'deterred-sources
   :type 'number)
 
-(defvar deterred-transport--auth-token nil
+(defvar deterred-transport-podorozhnik--auth-token nil
   "Current authentication token for Podorozhnik API.")
 
-(defun deterred-transport--api-login (callback)
+(defun deterred-transport-podorozhnik--api-login (callback)
   "Login to Podorozhnik API and call CALLBACK with the token."
-  (unless deterred-transport-login
+  (unless deterred-transport-podorozhnik-login
     (user-error "Podorozhnik login not set!"))
-  (unless deterred-transport-password
+  (unless deterred-transport-podorozhnik-password
     (user-error "Podorozhnik password not set!"))
   (let ((request-curl-options (append request-curl-options '("-k"))))
-    (request (concat deterred-transport-api-endpoint "auth/login")
+    (request (concat deterred-transport-podorozhnik-api-endpoint "auth/login")
       :type "POST"
       :headers '(("Content-Type" . "application/json;charset=utf-8")
                  ("x-ppa-language" . "ru"))
-      :data (json-encode `((login . ,deterred-transport-login)
-                           (password . ,deterred-transport-password)))
+      :data (json-encode `((login . ,deterred-transport-podorozhnik-login)
+                           (password . ,deterred-transport-podorozhnik-password)))
       :parser 'json-read
       :encoding 'utf-8
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
                   (let ((token (alist-get 'token data)))
-                    (setq deterred-transport--auth-token token)
+                    (setq deterred-transport-podorozhnik--auth-token token)
                     (funcall callback token))))
       :error #'deterred-utils-on-request-error)))
 
-(defun deterred-transport--api-get-trips (token page callback)
+(defun deterred-transport-podorozhnik--api-get-trips (token page callback)
   "Fetch trips from Podorozhnik API.
 
 TOKEN is the authentication token.
 PAGE is the page number to fetch.
 CALLBACK is called with the response data."
   (let ((request-curl-options (append request-curl-options '("-k"))))
-    (request (concat deterred-transport-api-endpoint "v3/trips")
+    (request (concat deterred-transport-podorozhnik-api-endpoint "v3/trips")
       :params `(("filters" . "")
                 ("sorts" . "-DateTime")
                 ("page" . ,(number-to-string page))
-                ("pageSize" . ,(number-to-string deterred-transport-page-size)))
+                ("pageSize" . ,(number-to-string deterred-transport-podorozhnik-page-size)))
       :headers `(("Authorization" . ,(concat "Bearer " token))
                  ("x-ppa-language" . "ru"))
       :parser 'json-read
@@ -122,12 +122,12 @@ CALLBACK is called with the response data."
                   (funcall callback data)))
       :error #'deterred-utils-on-request-error)))
 
-(defun deterred-transport--transform-trip (trip)
+(defun deterred-transport-podorozhnik--transform-trip (trip)
   "Transform a single TRIP from API format to database format.
 
 TRIP is an alist from the API response.
 
-Return an alist with keys: id, source, timestamp, transport, route."
+Return an alist with keys: id, source, timestamp, transport, route, cost."
   (let* ((datetime-string (alist-get 'dateTime trip))
          (timestamp (time-convert
                      (encode-time (iso8601-parse datetime-string))
@@ -137,15 +137,17 @@ Return an alist with keys: id, source, timestamp, transport, route."
                                    deterred-transport-vehicle-type-mapping)
                         "Unknown"))
          (route (or (alist-get 'vehicleRoute trip) ""))
+         (cost (/ (alist-get 'amountInMinorUnits trip) 100.0))
          (id (uuidgen-3 deterred-transport-uuid-namespace
                         (format "%s-podorozhnik" timestamp))))
     `((id . ,id)
       (source . "podorozhnik")
       (timestamp . ,timestamp)
       (transport . ,transport)
-      (route . ,route))))
+      (route . ,route)
+      (cost . ,cost))))
 
-(defun deterred-transport--fetch-all-trips (token page total-pages callback &optional accumulated-trips)
+(defun deterred-transport-podorozhnik--fetch-all-trips (token page total-pages callback &optional accumulated-trips)
   "Recursively fetch all trips from the API.
 
 TOKEN is the authentication token.
@@ -156,16 +158,16 @@ ACCUMULATED-TRIPS is the list of trips collected so far."
   (message "Fetching transport trips page %d%s..."
            page
            (if total-pages (format "/%d" total-pages) ""))
-  (deterred-transport--api-get-trips
+  (deterred-transport-podorozhnik--api-get-trips
    token
    page
    (lambda (data)
      (let* ((items (alist-get 'items data))
             (pages-count (alist-get 'pagesCount data))
-            (transformed-trips (mapcar #'deterred-transport--transform-trip items))
+            (transformed-trips (mapcar #'deterred-transport-podorozhnik--transform-trip items))
             (all-trips (append accumulated-trips transformed-trips)))
        (if (< page pages-count)
-           (deterred-transport--fetch-all-trips
+           (deterred-transport-podorozhnik--fetch-all-trips
             token (1+ page) pages-count callback all-trips)
          (funcall callback all-trips))))))
 
@@ -187,7 +189,7 @@ Return a Unix timestamp as integer."
 (defun deterred-transport--parse-pdf-line (line)
   "Parse a single LINE from the PDF table.
 
-Return an alist with keys: timestamp, transport, route, or nil if invalid."
+Return an alist with keys: timestamp, transport, route, cost, or nil if invalid."
   (when (string-match
          (rx (+ digit) (+ space)  ; ticket number
              "Подорожник" (+ space)  ; description
@@ -195,24 +197,28 @@ Return an alist with keys: timestamp, transport, route, or nil if invalid."
              (group (+ (any digit ":"))) (+ space)  ; time (HH:MM:SS)
              (group (+ (any digit "."))) (+ space)  ; date (DD.MM.YYYY)
              (group (+ (not (any space)))) (+ space)  ; route
-             (group (+ (any "А-Яа-я"))))  ; transport type
+             (group (+ (any "А-Яа-я"))) (+ space)  ; transport type
+             (group (+ digit)))  ; cost in rubles
          line)
     (let* ((time-str (match-string 1 line))
            (date-str (match-string 2 line))
            (route (match-string 3 line))
            (transport-ru (match-string 4 line))
+           (cost-rubles (string-to-number (match-string 5 line)))
            (transport (or (alist-get transport-ru
                                      deterred-transport-russian-vehicle-type-mapping
                                      nil nil #'equal)
                           "Unknown"))
            (timestamp (deterred-transport--parse-pdf-datetime time-str date-str))
+           (cost (* cost-rubles 1))  ; Don't convert rubles to minor units (kopecks)
            (id (uuidgen-3 deterred-transport-uuid-namespace
                           (format "%s-podorozhnik" timestamp))))
       `((id . ,id)
         (source . "podorozhnik")
         (timestamp . ,timestamp)
         (transport . ,transport)
-        (route . ,route)))))
+        (route . ,route)
+        (cost . ,cost)))))
 
 (defun deterred-transport--parse-pdf-text (text)
   "Parse TEXT from PDF export.
@@ -245,7 +251,7 @@ Return a list of trips as alists."
          db
          :table-name 'transport_trips
          :values trips
-         :attrs '(id source timestamp transport route)
+         :attrs '(id source timestamp transport route cost)
          :conflict-action 'do-nothing))
       (deterred-db-mark-updated-batch db '("transport_trips"))
       (message "Imported %d trips from PDF" (length trips)))))
@@ -259,14 +265,14 @@ Return a list of trips as alists."
         (sqlite-execute db "DELETE FROM transport_trips")
         (deterred-db-mark-updated-batch db '("transport_trips"))))))
 
-(defun deterred-transport-sync (&optional callback)
+(defun deterred-transport-podorozhnik-sync (&optional callback)
   "Sync transport trips from Podorozhnik API.
 
 Call CALLBACK when done."
   (interactive)
-  (deterred-transport--api-login
+  (deterred-transport-podorozhnik--api-login
    (lambda (token)
-     (deterred-transport--fetch-all-trips
+     (deterred-transport-podorozhnik--fetch-all-trips
       token 1 nil
       (lambda (all-trips)
         (let ((db (deterred-db--init)))
@@ -276,7 +282,7 @@ Call CALLBACK when done."
                db
                :table-name 'transport_trips
                :values all-trips
-               :attrs '(id source timestamp transport route)
+               :attrs '(id source timestamp transport route cost)
                :conflict-action 'do-nothing))
             (deterred-db-mark-updated-batch db '("transport_trips"))
             (if callback
@@ -306,8 +312,8 @@ end timestamp."
 
 Run CALLBACK when done."
   (deterred-source--actions-pick
-   '(("Load transport PDF" deterred-transport-load-pdf nil)
-     ("Sync transport trips" deterred-transport-sync nil)
+   '(("Load podorozhnik PDF" deterred-transport-load-pdf nil)
+     ("Sync podorozhnik trips" deterred-transport-podorozhnik-sync nil)
      ("Purge transport data" deterred-transport-purge nil))
    callback))
 
@@ -315,11 +321,11 @@ Run CALLBACK when done."
   "Sync transport trips with DETERRED.
 
 Call CALLBACK when done."
-  (unless deterred-transport-login
+  (unless deterred-transport-podorozhnik-login
     (user-error "Podorozhnik login not set!"))
-  (unless deterred-transport-password
+  (unless deterred-transport-podorozhnik-password
     (user-error "Podorozhnik password not set!"))
-  (deterred-transport-sync callback))
+  (deterred-transport-podorozhnik-sync callback))
 
 (cl-defmethod deterred-source-range-summary
   ((_source deterred-transport) start end &optional db)

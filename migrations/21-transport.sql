@@ -3,5 +3,6 @@ CREATE TABLE transport_trips (
   source TEXT NOT NULL,
   timestamp INTEGER NOT NULL,
   transport TEXT NOT NULL,
-  route TEXT NOT NULL
+  route TEXT NOT NULL,
+  cost INTEGER
 ) STRICT;
