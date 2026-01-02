@@ -77,7 +77,9 @@
     (podcasts-new-hours (name . "Listened to new podcasts per year"))
     (podcasts-languages (name . "Listened to languages per year"))
     (listened-to-top-by-month (name . "Listened to top N podcasts per month"))
-    (days-waited-to-listen (name . "Average days waited to listen per podcast"))))
+    (days-waited-to-listen (name . "Average days waited to listen per podcast"))
+    (last-discovered-podcasts (name . "Last discovered podcasts"))
+    (podcast-comparison-by-year (name . "Podcast comparison by year"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-podcasts)
                                                  params)
@@ -222,6 +224,77 @@ WHERE pf.id in (SELECT tp.id from top_podcasts tp)
  [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
 GROUP BY pf.title
 ORDER BY days_waited_to_listen"
+           params))
+      (last-discovered-podcasts
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH podcast_discovered AS (
+  SELECT
+    pf.id,
+    pf.title,
+    min(pl.timestamp) discovery_timestamp
+  FROM podcasts_listened pl
+  INNER JOIN podcasts_feed pf ON pf.id = pl.feed_id
+  GROUP BY pf.id, pf.title
+)
+SELECT
+  pd.title,
+  datetime(pd.discovery_timestamp, 'unixepoch') discovery_date,
+  round(sum(pl.played_duration) / (60.0 * 60.0), 2) hours_listened
+FROM podcast_discovered pd
+INNER JOIN podcasts_feed pf ON pf.id = pd.id
+INNER JOIN podcasts_listened pl ON pl.feed_id = pf.id
+WHERE 1 = 1 [[AND pd.discovery_timestamp >= :start-date]] [[AND pd.discovery_timestamp <= :end-date]]
+GROUP BY pd.id, pd.title, pd.discovery_timestamp
+ORDER BY pd.discovery_timestamp DESC
+LIMIT 50"
+           params))
+      (podcast-comparison-by-year
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH years_in_range AS (
+  SELECT DISTINCT strftime('%Y', timestamp, 'unixepoch') year
+  FROM podcasts_listened
+  WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
+  ORDER BY year DESC
+  LIMIT 2
+),
+year_totals AS (
+  SELECT
+    strftime('%Y', pl.timestamp, 'unixepoch') year,
+    sum(pl.played_duration) / (60.0 * 60.0) total_hours
+  FROM podcasts_listened pl
+  INNER JOIN podcasts_feed pf ON pf.id = pl.feed_id
+  WHERE strftime('%Y', pl.timestamp, 'unixepoch') IN (SELECT year FROM years_in_range)
+    [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
+    [[AND pf.title IN :feed]]
+  GROUP BY strftime('%Y', pl.timestamp, 'unixepoch')
+),
+podcast_by_year AS (
+  SELECT
+    strftime('%Y', pl.timestamp, 'unixepoch') year,
+    pf.title,
+    sum(pl.played_duration) / (60.0 * 60.0) hours
+  FROM podcasts_listened pl
+  INNER JOIN podcasts_feed pf ON pf.id = pl.feed_id
+  WHERE strftime('%Y', pl.timestamp, 'unixepoch') IN (SELECT year FROM years_in_range)
+    [[AND pl.timestamp >= :start-date]] [[AND pl.timestamp <= :end-date]]
+    [[AND pf.title IN :feed]]
+  GROUP BY strftime('%Y', pl.timestamp, 'unixepoch'), pf.title
+)
+SELECT
+  pby.title podcast,
+  round(COALESCE(max(CASE WHEN pby.year = (SELECT max(year) FROM years_in_range) THEN pby.hours END), 0), 2) current_year_hours,
+  round(COALESCE(max(CASE WHEN pby.year = (SELECT min(year) FROM years_in_range) THEN pby.hours END), 0), 2) prev_year_hours,
+  round(COALESCE(max(CASE WHEN pby.year = (SELECT max(year) FROM years_in_range) THEN pby.hours * 100.0 / yt.total_hours END), 0), 2) current_year_pct,
+  round(COALESCE(max(CASE WHEN pby.year = (SELECT min(year) FROM years_in_range) THEN pby.hours * 100.0 / yt.total_hours END), 0), 2) prev_year_pct,
+  (SELECT max(year) FROM years_in_range) current_year,
+  (SELECT min(year) FROM years_in_range) prev_year
+FROM podcast_by_year pby
+LEFT JOIN year_totals yt ON yt.year = pby.year
+GROUP BY pby.title
+ORDER BY current_year_hours DESC
+LIMIT 20"
            params)))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-podcasts)
@@ -258,6 +331,11 @@ fig, ax = plt.subplots(figsize=(8, 5))
 df_y.plot(ax=ax, kind='bar', x='year', y='hours')
 ax.set_title('Hours listened per year')
 ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+
+# Add value labels on top of bars
+for container in ax.containers:
+    ax.bar_label(container, fmt='%.0f', fontsize=8)
+
 images.append(fig_to_b64(fig))
 
 fig, ax = plt.subplots(figsize=(8, 5))
@@ -295,28 +373,87 @@ df_new = pd.DataFrame(data['podcasts-new-hours']['data'])
 
 images = []
 
-fig, ax = plt.subplots(figsize=(8, 5))
-df_podcasts.plot(ax=ax, kind='bar', x='year', y='new_podcasts')
-ax.set_title('Podcasts discovered per year')
-images.append(fig_to_b64(fig))
+# Combined: Podcasts discovered + Hours listened to new vs old podcasts
+fig, ax1 = plt.subplots(figsize=(8, 5))
+ax1.set_title('Podcasts discovered and hours listened to new vs. old podcasts')
+ax1.set_xlabel('Year')
+ax1.set_ylabel('Podcasts Discovered', color='C2')
 
-fig, ax = plt.subplots(figsize=(8, 5))
-df_new.plot(ax=ax, kind='bar', x='year', stacked=True)
-ax.set_title('Hours listened to new podcasts per year')
+import numpy as np
+x_pos = np.arange(len(df_podcasts))
+width = 0.35
+
+# Bars for podcasts discovered on primary axis
+bars1 = ax1.bar(x_pos - width/2 - 0.05, df_podcasts['new_podcasts'], width, color='C2', label='Podcasts Discovered')
+ax1.tick_params(axis='y', labelcolor='C2')
+ax1.set_xticks(x_pos)
+ax1.set_xticklabels(df_podcasts['year'], rotation=45)
+ax1.legend(loc='upper left')
+
+# Add value labels on podcasts discovered bars
+for bar in bars1:
+    height = bar.get_height()
+    ax1.text(bar.get_x() + bar.get_width()/2., height,
+            f'{int(height)}',
+            ha='center', va='bottom', fontsize=8, color='C2')
+
+# Stacked bars for hours listened on secondary axis
+ax2 = ax1.twinx()
+ax2.set_ylabel('Hours Listened', color='black')
+ax2.bar(x_pos + width/2 + 0.05, df_new['new'], width, label='New podcasts', color='C0', alpha=0.7)
+ax2.bar(x_pos + width/2 + 0.05, df_new['old'], width, bottom=df_new['new'], label='Old podcasts', color='C1', alpha=0.7)
+ax2.legend(loc='upper right')
+
+fig.tight_layout()
 images.append(fig_to_b64(fig))
 
 print(json.dumps(images))"
    :input data
    :on-success
    (lambda (images)
-     (insert (deterred-format (f-h3 "Podcasts discovered per year") "\n"))
+     (insert (deterred-format (f-h3 "Podcasts discovered and hours listened to new vs. old podcasts") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 0))
-     (insert "\n")
-     (insert (deterred-format (f-h3 "Hours listened to new podcasts per year") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n")))
   (insert
-   (deterred-format (f-h2 "Listening dynamics"))  "\n"
+   (deterred-format (f-h3 "Last discovered podcasts") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'last-discovered-podcasts data))
+    :column-names '((title . "Podcast")
+                    (discovery_date . "Discovery Date")
+                    (hours_listened . "Hours Listened"))
+    :max-rows 10
+    :max-column-width 30
+    :grid-button t)
+   "\n")
+
+  (insert
+   (deterred-format (f-h2 "Listening dynamics"))  "\n")
+
+  (let* ((comparison-data (alist-get 'data (alist-get 'podcast-comparison-by-year data)))
+         (first-row (car comparison-data))
+         (current-year (alist-get 'current_year first-row))
+         (prev-year (alist-get 'prev_year first-row)))
+    (when (and comparison-data
+               current-year
+               prev-year
+               (not (equal current-year prev-year)))
+      (insert
+       (deterred-format (f-h3 "Podcast comparison by year") "\n")
+       (deterred-grid-print-with-org
+        (deterred-utils-pick-list
+         comparison-data
+         '(podcast current_year_hours prev_year_hours current_year_pct prev_year_pct))
+        :column-names `((podcast . "Podcast")
+                        (current_year_hours . ,(format "Hours in %s" current-year))
+                        (prev_year_hours . ,(format "Hours in %s" prev-year))
+                        (current_year_pct . ,(format "%% in %s" current-year))
+                        (prev_year_pct . ,(format "%% in %s" prev-year)))
+        :max-rows 20
+        :max-column-width 30
+        :grid-button t)
+       "\n")))
+
+  (insert
    (deterred-format (f-h3 "Hours listened to top N podcast by month")) "\n")
   (deterred-dashboard-exec-python
    :python-code

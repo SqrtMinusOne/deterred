@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'pcsv)
+(require 'seq)
 (require 'validate)
 (require 'backtrace)
 (require 'request)
@@ -230,6 +231,67 @@ are added to TARGET, overwriting existing keys if present."
   (maphash (lambda (k v)
              (puthash k v target))
            source))
+
+(defun deterred-utils-pick-list (list keys)
+  "Leave only elements with `car' in KEYS in a LIST of alists."
+  (mapcar
+   (lambda (item)
+     (seq-filter
+      (lambda (elem)
+        (member (car elem) keys))
+      item))
+   list))
+
+(defun deterred-utils-normalize-by-timeout (chains timeout)
+  "Normalize CHAINS of timestamps by TIMEOUT.
+
+A chain is a either a list of UNIX timestamps, or a list of cons cells
+with UNIX timestamps, where `car' is the start and `cdr' is the end of
+a timespan.
+
+TIMEOUT is a number of seconds.
+
+The function returns chains in the same order, converted to timespans
+\(cons cells\), with gaps less than TIMEOUT removed.  This is similar to
+what WakaTime does by converting a list of individual \"heartbeats\"
+into timestamps."
+  (let (series
+        normalized-series
+        current-item)
+    ;; Merge chain into one series
+    ;; A series is a list of lists (chain-id, start, end)
+    (cl-loop for i from 0
+             for chain in chains
+             do (cl-loop for value in chain
+                         do (if (consp value)
+                                (push (list i (car value) (cdr value)) series)
+                              (push (list i value value) series))))
+    ;; Normalize series
+    (dolist (item (append (seq-sort-by (lambda (d) (nth 1 d)) #'< series) (list nil)))
+      (cond
+       ((not current-item) (setq current-item item))
+       ((null item) (push current-item normalized-series))
+       (t (let ((is-timeout (> (- (nth 1 item) (nth 2 current-item)) timeout))
+                (is-chain-switch (not (= (nth 0 item) (nth 0 current-item)))))
+            (unless is-timeout
+              (setf (nth 2 current-item) (nth 1 item)))
+            (when (or is-timeout is-chain-switch)
+              (push current-item normalized-series)
+              (setq current-item item))))))
+    (setq my/test normalized-series)
+    ;; Back into chains
+    (mapcar
+     (lambda (series)
+       (seq-sort-by
+        #'car
+        #'<
+        (mapcar
+         (lambda (item) (cons (nth 1 item) (nth 2 item)))
+         (cdr series))))
+     (seq-sort-by
+      #'car
+      #'<
+      (seq-group-by #'car normalized-series)))))
 
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

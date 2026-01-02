@@ -90,12 +90,16 @@
     (listened-by-week (name . "Hours listened by week"))
     (artists-discovered (name . "Artists discovered"))
     (albums-discovered (name . "Albums discovered"))
+    (last-discovered-artists (name . "Last discovered artists"))
+    (last-discovered-albums (name . "Last discovered albums"))
     (new-albums-listened (name . "Hours listened to new albums by year"))
+    (current-year-releases-listened (name . "Hours listened to current year releases vs. older"))
     (average-album-age-per-month (name . "Average album age per month"))
     (top-days (name . "Top days by listened time"))
     (top-weeks (name . "Top weeks by listened time"))
     (top-months (name . "Top months by listened time"))
-    (listened-to-top-by-month (name . "Hours listened to top N artists by month"))))
+    (listened-to-top-by-month (name . "Hours listened to top N artists by month"))
+    (artist-comparison-by-year (name . "Artist comparison by year"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-mpd)
                                                  params)
@@ -229,6 +233,62 @@ GROUP BY year_discovered"
 SELECT year_discovered, count(*) new_albums FROM album_discovered_years
 GROUP BY year_discovered"
            params))
+      (last-discovered-artists
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH artist_discovered AS (
+  SELECT
+    ms.album_artist,
+    min(msl.timestamp) discovery_timestamp
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  GROUP BY ms.album_artist
+),
+cts AS (
+  SELECT count(*) c, mpd_song_id FROM mpd_song_listened
+  GROUP BY mpd_song_id
+)
+SELECT
+  ad.album_artist artist,
+  datetime(ad.discovery_timestamp, 'unixepoch') discovery_date,
+  round(sum(cts.c * ms.duration) / (60.0 * 60.0), 2) hours_listened
+FROM artist_discovered ad
+INNER JOIN mpd_song ms ON ms.album_artist = ad.album_artist
+INNER JOIN cts ON cts.mpd_song_id = ms.id
+WHERE 1 = 1 [[AND ad.discovery_timestamp >= :start-date]] [[AND ad.discovery_timestamp <= :end-date]]
+GROUP BY ad.album_artist, ad.discovery_timestamp
+ORDER BY ad.discovery_timestamp DESC
+LIMIT 20"
+           params))
+      (last-discovered-albums
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH album_discovered AS (
+  SELECT
+    ms.album_artist,
+    ms.album,
+    min(msl.timestamp) discovery_timestamp
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  GROUP BY ms.album_artist, ms.album
+),
+cts AS (
+  SELECT count(*) c, mpd_song_id FROM mpd_song_listened
+  GROUP BY mpd_song_id
+)
+SELECT
+  ad.album,
+  ad.album_artist,
+  datetime(ad.discovery_timestamp, 'unixepoch') discovery_date,
+  round(sum(cts.c * ms.duration) / (60.0 * 60.0), 2) hours_listened
+FROM album_discovered ad
+INNER JOIN mpd_song ms ON ms.album_artist = ad.album_artist AND ms.album = ad.album
+INNER JOIN cts ON cts.mpd_song_id = ms.id
+WHERE 1 = 1 [[AND ad.discovery_timestamp >= :start-date]] [[AND ad.discovery_timestamp <= :end-date]]
+GROUP BY ad.album_artist, ad.album, ad.discovery_timestamp
+ORDER BY ad.discovery_timestamp DESC
+LIMIT 50"
+           params))
       (new-albums-listened
        . ,(deterred-db-select-template-alist
            db
@@ -244,6 +304,19 @@ SELECT
 FROM mpd_song_listened msl
 INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
 INNER JOIN album_discovered_years ady ON ady.album_artist = ms.album_artist AND ady.album = ms.album
+WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
+  [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+GROUP BY STRFTIME('%Y', msl.timestamp, 'unixepoch')"
+           params))
+      (current-year-releases-listened
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  STRFTIME('%Y', msl.timestamp, 'unixepoch') \"year\",
+  round(sum(CASE WHEN ms.year = STRFTIME('%Y', msl.timestamp, 'unixepoch') THEN ms.duration ELSE 0 END) / (60.0 * 60.0), 2) \"current_year\",
+  round(sum(CASE WHEN ms.year != STRFTIME('%Y', msl.timestamp, 'unixepoch') OR ms.year IS NULL THEN ms.duration ELSE 0 END) / (60.0 * 60.0), 2) \"older\"
+FROM mpd_song_listened msl
+INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
 WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
   [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
 GROUP BY STRFTIME('%Y', msl.timestamp, 'unixepoch')"
@@ -365,6 +438,53 @@ SELECT sum(album_age * fraction) age, month
 FROM album_data
 GROUP BY month
 ORDER BY month ASC"
+           params))
+      (artist-comparison-by-year
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH years_in_range AS (
+  SELECT DISTINCT strftime('%Y', timestamp, 'unixepoch') year
+  FROM mpd_song_listened
+  WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
+  ORDER BY year DESC
+  LIMIT 2
+),
+year_totals AS (
+  SELECT
+    strftime('%Y', msl.timestamp, 'unixepoch') year,
+    sum(ms.duration) / (60.0 * 60.0) total_hours
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  WHERE strftime('%Y', msl.timestamp, 'unixepoch') IN (SELECT year FROM years_in_range)
+    [[AND msl.timestamp >= :start-date]] [[AND msl.timestamp <= :end-date]]
+    [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+  GROUP BY strftime('%Y', msl.timestamp, 'unixepoch')
+),
+artist_by_year AS (
+  SELECT
+    strftime('%Y', msl.timestamp, 'unixepoch') year,
+    ms.album_artist,
+    round(sum(ms.duration) / (60.0 * 60.0), 2) hours
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  WHERE strftime('%Y', msl.timestamp, 'unixepoch') IN (SELECT year FROM years_in_range)
+    [[AND msl.timestamp >= :start-date]] [[AND msl.timestamp <= :end-date]]
+    [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+  GROUP BY strftime('%Y', msl.timestamp, 'unixepoch'), ms.album_artist
+)
+SELECT
+  aby.album_artist artist,
+  round(COALESCE(max(CASE WHEN aby.year = (SELECT max(year) FROM years_in_range) THEN aby.hours END), 0), 2) current_year_hours,
+  round(COALESCE(max(CASE WHEN aby.year = (SELECT min(year) FROM years_in_range) THEN aby.hours END), 0), 2) prev_year_hours,
+  round(COALESCE(max(CASE WHEN aby.year = (SELECT max(year) FROM years_in_range) THEN aby.hours * 100.0 / yt.total_hours END), 0), 2) current_year_pct,
+  round(COALESCE(max(CASE WHEN aby.year = (SELECT min(year) FROM years_in_range) THEN aby.hours * 100.0 / yt.total_hours END), 0), 2) prev_year_pct,
+  (SELECT max(year) FROM years_in_range) current_year,
+  (SELECT min(year) FROM years_in_range) prev_year
+FROM artist_by_year aby
+LEFT JOIN year_totals yt ON yt.year = aby.year
+GROUP BY aby.album_artist
+ORDER BY current_year_hours DESC
+LIMIT 20"
            params)))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-mpd)
@@ -427,14 +547,16 @@ images.append(fig_to_b64(fig))
 fig, ax = plt.subplots(figsize=(8, 5))
 df_m.plot(ax=ax, kind='bar', x='month', y='total')
 ax.set_title('Hours listened per month')
-ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+if len(df_m) > 30:
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
 images.append(fig_to_b64(fig))
 
 if len(df_w) < 40:
     fig, ax = plt.subplots(figsize=(8, 5))
     df_w.plot(ax=ax, kind='bar', x='week', y='total')
     ax.set_title('Hours listened per week')
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+    if len(df_w) > 30:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
     images.append(fig_to_b64(fig))
 
 print(json.dumps(images))"
@@ -444,9 +566,23 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Listened per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 0))
      (insert "\n")
+     (insert
+      (deterred-grid-print-with-org
+       (alist-get 'data (alist-get 'listened-by-year data))
+       :column-names '((year . "Year") (total . "Hours listened"))
+       :max-rows 20
+       :grid-button t)
+      "\n")
      (insert (deterred-format (f-h3 "Listened per month") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n")
+     (insert
+      (deterred-grid-print-with-org
+       (alist-get 'data (alist-get 'listened-by-month data))
+       :column-names '((month . "Month") (total . "Hours listened"))
+       :max-rows 20
+       :grid-button t)
+      "\n")
      (when (> (seq-length images) 2)
        (insert (deterred-format (f-h3 "Listened per week") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
@@ -468,24 +604,76 @@ df_artists = pd.DataFrame(data['artists-discovered']['data'])
 df_albums = pd.DataFrame(data['albums-discovered']['data'])
 df_new = pd.DataFrame(data['new-albums-listened']['data'])
 df_age = pd.DataFrame(data['average-album-age-per-month']['data'])
+df_current_year = pd.DataFrame(data['current-year-releases-listened']['data'])
 
 images = []
 
-fig, ax = plt.subplots(figsize=(8, 5))
-df_artists.plot(ax=ax, kind='bar', x='year_discovered', y='new_artists')
-ax.set_title('New artists per year')
+# Combined: New artists per year + New albums per year
+fig, ax1 = plt.subplots(figsize=(8, 5))
+ax1.set_title('New artists and albums per year')
+ax1.set_xlabel('Year')
+ax1.set_ylabel('New Artists', color='C0')
+
+x_pos = np.arange(len(df_artists))
+width = 0.35
+
+bars1 = ax1.bar(x_pos - width/2 - 0.05, df_artists['new_artists'], width, color='C0', label='New Artists')
+ax1.tick_params(axis='y', labelcolor='C0')
+ax1.set_xticks(x_pos)
+ax1.set_xticklabels(df_artists['year_discovered'], rotation=45)
+ax1.legend(loc='upper left')
+
+# Add value labels on top of artist bars
+for bar in bars1:
+    height = bar.get_height()
+    ax1.text(bar.get_x() + bar.get_width()/2., height,
+            f'{int(height)}',
+            ha='center', va='bottom', fontsize=8, color='C0')
+
+ax2 = ax1.twinx()
+ax2.set_ylabel('New Albums', color='C1')
+bars2 = ax2.bar(x_pos + width/2 + 0.05, df_albums['new_albums'], width, color='C1', label='New Albums')
+ax2.tick_params(axis='y', labelcolor='C1')
+ax2.legend(loc='upper right')
+
+# Add value labels on top of album bars
+for bar in bars2:
+    height = bar.get_height()
+    ax2.text(bar.get_x() + bar.get_width()/2., height,
+            f'{int(height)}',
+            ha='center', va='bottom', fontsize=8, color='C1')
+
+fig.tight_layout()
 images.append(fig_to_b64(fig))
 
-fig, ax = plt.subplots(figsize=(8, 5))
-df_albums.plot(ax=ax, kind='bar', x='year_discovered', y='new_albums')
-ax.set_title('New albums per year')
+# Combined: Hours listened to new vs. old albums + current year releases vs. older
+fig, ax1 = plt.subplots(figsize=(8, 5))
+ax1.set_title('Hours listened: new vs. old albums & current year releases')
+ax1.set_xlabel('Year')
+ax1.set_ylabel('Hours (New vs. Old)', color='black')
+
+x_pos = np.arange(len(df_new))
+width = 0.35
+
+# Stacked bars for new vs. old on primary axis
+ax1.bar(x_pos - width/2 - 0.05, df_new['new'], width, label='New albums', color='C0', alpha=0.7)
+ax1.bar(x_pos - width/2 - 0.05, df_new['old'], width, bottom=df_new['new'], label='Old albums', color='C1', alpha=0.7)
+
+ax1.set_xticks(x_pos)
+ax1.set_xticklabels(df_new['year'], rotation=45)
+ax1.legend(loc='upper left')
+
+# Stacked bars for current year releases on secondary axis
+ax2 = ax1.twinx()
+ax2.set_ylabel('Hours (Current Year Releases)', color='black')
+ax2.bar(x_pos + width/2 + 0.05, df_current_year['current_year'], width, label='Current year', color='C2', alpha=0.7)
+ax2.bar(x_pos + width/2 + 0.05, df_current_year['older'], width, bottom=df_current_year['current_year'], label='Older', color='C3', alpha=0.7)
+ax2.legend(loc='upper right')
+
+fig.tight_layout()
 images.append(fig_to_b64(fig))
 
-fig, ax = plt.subplots(figsize=(8, 5))
-df_new.plot(ax=ax, kind='bar', x='year', stacked=True)
-ax.set_title('Hours listened to new vs. old albums')
-images.append(fig_to_b64(fig))
-
+# Average album age per month
 fig, ax = plt.subplots(figsize=(8, 5))
 ax.set_title('Average album age (in months) per month')
 x = np.arange(len(df_age))
@@ -501,19 +689,36 @@ print(json.dumps(images))"
    :input data
    :on-success
    (lambda (images)
-     (insert (deterred-format (f-h3 "New artists per year") "\n"))
+     (insert (deterred-format (f-h3 "New artists and albums per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 0))
      (insert "\n")
-     (insert (deterred-format (f-h3 "New albums per year") "\n"))
+     (insert (deterred-format (f-h3 "Hours listened: new vs. old albums & current year releases") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n")
-     (insert (deterred-format (f-h3 "Hours listened to new vs. old albums") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 2))
-     (insert "\n")
      (insert (deterred-format (f-h3 "Average album age per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 3))
+     (deterred-dashboard-print-images-base64 (elt images 2))
      (insert "\n")))
 
+  (insert
+   (deterred-format (f-h3 "Last discovered artists") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'last-discovered-artists data))
+    :column-names '((artist . "Artist")
+                    (discovery_date . "Discovery Date")
+                    (hours_listened . "Hours Listened"))
+    :max-rows 10
+    :grid-button t)
+   "\n"
+   (deterred-format (f-h3 "Last discovered albums") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'last-discovered-albums data))
+    :column-names '((album . "Album")
+                    (album_artist . "Artist")
+                    (discovery_date . "Discovery Date")
+                    (hours_listened . "Hours Listened"))
+    :max-rows 10
+    :grid-button t)
+   "\n")
   (insert
    (deterred-format (f-h2 "Top periods")) "\n"
    (deterred-format (f-h3 "Top days by listened time")) "\n"
@@ -537,6 +742,30 @@ print(json.dumps(images))"
 
   (insert
    (deterred-format (f-h2 "Dynamics by artists")) "\n")
+  (let* ((comparison-data (alist-get 'data (alist-get 'artist-comparison-by-year data)))
+         (first-row (car comparison-data))
+         (current-year (alist-get 'current_year first-row))
+         (prev-year (alist-get 'prev_year first-row)))
+    (when (and comparison-data
+               current-year
+               prev-year
+               (not (equal current-year prev-year)))
+      (insert
+       (deterred-format (f-h3 "Artist comparison by year")) "\n"
+       (deterred-grid-print-with-org
+        (deterred-utils-pick-list
+         comparison-data
+         '(artist current_year_hours prev_year_hours current_year_pct prev_year_pct))
+        :column-names `((artist . "Artist")
+                        (current_year_hours . ,(format "Hours in %s" current-year))
+                        (prev_year_hours . ,(format "Hours in %s" prev-year))
+                        (current_year_pct . ,(format "%% in %s" current-year))
+                        (prev_year_pct . ,(format "%% in %s" prev-year)))
+        :max-rows 20
+        :grid-button t)
+       "\n")))
+  (insert
+   (deterred-format (f-h3 "Hours listened to top N artists by month")) "\n")
   (deterred-dashboard-exec-python
    :python-code
    "from matplotlib import pyplot as plt

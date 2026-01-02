@@ -566,12 +566,39 @@ output string."
     output
     "\n\n")))
 
+(defun deterred-dashboard-save-image-at-point ()
+  "Save the image at point to a file."
+  (interactive)
+  (let ((data (get-text-property (point) 'deterred-image-data)))
+    (if (not data)
+        (message "No image at point")
+      (let* ((img-type (or (get-text-property (point) 'deterred-image-type)
+                           'png))
+             (file (read-file-name "Save image to: "
+                                   nil nil nil
+                                   (format "image.%s" img-type))))
+        (with-temp-file file
+          (set-buffer-multibyte nil)
+          (insert data))
+        (message "Image saved to %s" file)))))
+
+(defvar deterred-dashboard-image-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "S") #'deterred-dashboard-save-image-at-point)
+    (when (fboundp #'evil-define-key*)
+      (evil-define-key* '(normal) map
+        "S" #'deterred-dashboard-save-image-at-point))
+    map)
+  "Keymap for images in DETERRED dashboards.")
+
 (defun deterred-dashboard-print-images-base64 (images &rest props)
   "Print IMAGES given as base64 strings.
 
 IMAGES is either one base64-encoded image string or a sequence of them.
 
-PROPS are forwarded to `create-image'."
+PROPS are forwarded to `create-image'.
+
+Press 's' or 'w' on an image to save it to a file."
   (when (stringp images)
     (setq images (list images)))
   (insert
@@ -580,9 +607,14 @@ PROPS are forwarded to `create-image'."
       (condition-case-unless-debug err
           (let* ((data (base64-decode-string image))
                  (img (apply #'create-image
-                             data nil t props)))
-            (if (image-type-available-p (image-property img :type))
-                (propertize "[IMG]" 'display img)
+                             data nil t props))
+                 (img-type (image-property img :type)))
+            (if (image-type-available-p img-type)
+                (propertize "[IMG]"
+                            'display img
+                            'deterred-image-data data
+                            'deterred-image-type img-type
+                            'keymap deterred-dashboard-image-map)
               "[IMG]"))
         (error (deterred-format
                 (f-ace "Error: " 'error)
