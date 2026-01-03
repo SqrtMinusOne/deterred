@@ -37,6 +37,7 @@
 (require 'deterred-faces)
 (require 'deterred-source)
 (require 'deterred-utils)
+(require 'deterred-backup)
 
 (defconst deterred-dispatcher-buffer-name "*DETERRED*"
   "Default buffer name for org-journal-tags status.")

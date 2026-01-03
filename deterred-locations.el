@@ -31,6 +31,7 @@
 (require 'org)
 
 (require 'deterred-db)
+(require 'deterred-format)
 (require 'deterred-source)
 
 (defconst deterred-locations-uuid-namespace

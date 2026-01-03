@@ -28,6 +28,8 @@
 ;;; Code:
 (require 'deterred-db)
 (require 'deterred-format)
+(require 'deterred-source)
+
 (require 'magit-section)
 (require 'uuidgen)
 (require 'cl-lib)
