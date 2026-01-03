@@ -33,6 +33,7 @@
 (require 'deterred-db)
 (require 'deterred-locations)
 (require 'deterred-format)
+(require 'deterred-source)
 
 (defconst deterred-org-journal-tags-uuid-namespace
   "97cdf2aa-0f6f-4c03-8071-73483503db49")
