@@ -282,6 +282,7 @@ PARAMS is the parameters, DATA is data as returned by
     (require 'deterred-dashboard-digikam)
     (require 'deterred-dashboard-messengers)
     (require 'deterred-dashboard-org-journal-tags)
+    (require 'deterred-dashboard-org-roam)
 
     (setq deterred-dashboards
           (list (deterred-dashboard-dummy)
@@ -292,7 +293,8 @@ PARAMS is the parameters, DATA is data as returned by
                 (deterred-dashboard-read-it-later)
                 (deterred-dashboard-digikam)
                 (deterred-dashboard-messengers)
-                (deterred-dashboard-org-journal-tags)))))
+                (deterred-dashboard-org-journal-tags)
+                (deterred-dashboard-org-roam)))))
 
 ;;;###autoload
 (defun deterred-dashboard-open (dashboard &optional override-params)
