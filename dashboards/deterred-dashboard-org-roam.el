@@ -69,6 +69,8 @@
   '((nodes-per-day (name . "Total nodes per day"))
     (nodes-created-per-month (name . "Nodes created per month"))
     (nodes-created-per-year (name . "Nodes created per year"))
+    (nodes-modified-per-month (name . "Nodes modified per month"))
+    (nodes-modified-per-year (name . "Nodes modified per year"))
     (nodes-by-tag-per-month (name . "Total nodes by tag per month"))
     (total-nodes-by-tag (name . "Total nodes by tag"))
     (nodes-by-heading-level-per-month (name . "Total nodes by heading level per month"))
@@ -145,6 +147,34 @@ FROM org_roam_node
 WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
 GROUP BY strftime('%Y', date(timestamp, 'unixepoch'))
+ORDER BY year ASC"
+           params))
+      (nodes-modified-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', date(ornm.timestamp, 'unixepoch')) month,
+  count(DISTINCT node_id) count
+FROM org_roam_node_modification ornm
+INNER JOIN org_roam_node orn ON orn.id = ornm.node_id
+WHERE ornm.timestamp != orn.timestamp
+  [[AND ornm.timestamp >= :start-date]]
+  [[AND ornm.timestamp <= :end-date]]
+GROUP BY strftime('%Y-%m', date(ornm.timestamp, 'unixepoch'))
+ORDER BY month ASC"
+           params))
+      (nodes-modified-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', date(ornm.timestamp, 'unixepoch')) year,
+  count(DISTINCT node_id) count
+FROM org_roam_node_modification ornm
+INNER JOIN org_roam_node orn ON orn.id = ornm.node_id
+WHERE ornm.timestamp != orn.timestamp
+  [[AND ornm.timestamp >= :start-date]]
+  [[AND ornm.timestamp <= :end-date]]
+GROUP BY strftime('%Y', date(ornm.timestamp, 'unixepoch'))
 ORDER BY year ASC"
            params))
       (nodes-by-tag-per-month
@@ -279,6 +309,8 @@ data = json.loads(input())
 df_per_day = pd.DataFrame(data['nodes-per-day']['data'])
 df_created_per_month = pd.DataFrame(data['nodes-created-per-month']['data'])
 df_created_per_year = pd.DataFrame(data['nodes-created-per-year']['data'])
+df_modified_per_month = pd.DataFrame(data['nodes-modified-per-month']['data'])
+df_modified_per_year = pd.DataFrame(data['nodes-modified-per-year']['data'])
 
 images = []
 
@@ -320,6 +352,24 @@ for container in ax.containers:
     ax.bar_label(container, fmt='%d')
 images.append(fig_to_b64(fig))
 
+fig, ax = plt.subplots(figsize=(8, 5))
+df_modified_per_month.plot(ax=ax, kind='bar', x='month', y='count', legend=False)
+ax.set_title('Nodes modified per month')
+ax.set_xlabel('Month')
+ax.set_ylabel('Count')
+if len(df_modified_per_month) > 30:
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+images.append(fig_to_b64(fig))
+
+fig, ax = plt.subplots(figsize=(8, 5))
+df_modified_per_year.plot(ax=ax, kind='bar', x='year', y='count', legend=False)
+ax.set_title('Nodes modified per year')
+ax.set_xlabel('Year')
+ax.set_ylabel('Count')
+for container in ax.containers:
+    ax.bar_label(container, fmt='%d')
+images.append(fig_to_b64(fig))
+
 print(json.dumps(images))"
      :input data
      :on-success
@@ -332,6 +382,12 @@ print(json.dumps(images))"
        (insert "\n")
        (insert (deterred-format (f-h3 "Nodes created per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
+       (insert "\n")
+       (insert (deterred-format (f-h3 "Nodes modified per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 3))
+       (insert "\n")
+       (insert (deterred-format (f-h3 "Nodes modified per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 4))
        (insert "\n")))
     (when tag
       (insert (deterred-format (f-h2 "Tags") "\n"))
