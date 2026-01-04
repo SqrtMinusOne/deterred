@@ -668,7 +668,7 @@ stdout of the process as the sole argument."
            ,@(when python-file
                `(,python-file))))
         output parsed-output)
-    (condition-case err
+    (condition-case-unless-debug err
         (with-temp-buffer
           (insert (json-encode input))
           (let ((process-environment (copy-sequence process-environment)))

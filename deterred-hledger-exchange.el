@@ -55,8 +55,9 @@ Data source parameters is a list.  The first item is a symbol, which
 can be:
 - cbr for Central Bank of Russia
 - frankfurter for the Frankfurter API
-- coinmarketcap.
-Only cbr and frankfurter are automated.
+- coinmarketcap
+- rosstat for Rosstat Consumer Price Index.
+Only cbr, frankfurter, and rosstat are automated.
 
 For CBR, the parameter list is as follows:
 - cbr (a symbol)
@@ -71,7 +72,10 @@ For Coinmarketcap:
 - coinmarketcap (a symbol)
 - URL, e.g. https://coinmarketcap.com/currencies/bitcoin/historical-data/.
   It doesn't serve any useful purpose, but the package will propose to
-  open it in a browser."
+  open it in a browser.
+
+For Rosstat:
+- rosstat (a symbol)."
   :group 'deterred
   :type '(repeat
           (list
@@ -92,8 +96,11 @@ For Coinmarketcap:
              (string :tag "Target currency code"))
             (list
              :tag "Coinmarketcap"
-             (const frankfurter)
-             (string :tag "Coinmarketcap URL"))))))
+             (const coinmarketcap)
+             (string :tag "Coinmarketcap URL"))
+            (list
+             :tag "Rosstat CPI"
+             (const rosstat))))))
 
 (defconst deterred-hledger-exchange--cbr-api "https://cbr.ru/scripts/XML_dynamic.asp"
   "URL of the CBR's time series script.")
@@ -192,6 +199,62 @@ interfaces compatibility with other functions."
                          (or (null end) (<= timestamp end)))
                collect (cons timestamp (string-to-number (alist-get 'close datum))))))))
 
+(defconst deterred-hledger-exchange--rosstat-months
+  '(("январь" . 1) ("февраль" . 2) ("март" . 3) ("апрель" . 4)
+    ("май" . 5) ("июнь" . 6) ("июль" . 7) ("август" . 8)
+    ("сентябрь" . 9) ("октябрь" . 10) ("ноябрь" . 11) ("декабрь" . 12))
+  "Russian month names to numbers mapping.")
+
+(cl-defun deterred-hledger-exchange--parse-rosstat-cpi (start end callback &key filename)
+  "Parse Rosstat's Consumer Price Index XLSX.
+
+FILENAME is the path to the XLSX file, START and END are optional UNIX
+timestamps to filter the data.
+
+CALLBACK is called with a list of cons cells, where car is a UNIX
+timestamp, and cdr is the cumulative inflation factor value.  This uses
+callbacks for interface compatibility with other functions."
+  (let* ((temp-dir (make-temp-file "rosstat-cpi-" t))
+         (csv-base (expand-file-name "data.csv" temp-dir))
+         (csv-file (concat csv-base ".1")))
+    (unwind-protect
+        (progn
+          (unless (zerop (call-process "ssconvert" nil nil nil
+                                       "-S" (expand-file-name filename)
+                                       csv-base))
+            (error "Failed to convert Excel file to CSV"))
+
+          (let* ((content (with-temp-buffer
+                            (insert-file-contents csv-file)
+                            (goto-char (point-min))
+                            (delete-line) (delete-line) (delete-line)
+                            (buffer-string)))
+                 (raw-data (deterred-utils-read-csv-string-with-python content))
+                 (data
+                  (seq-sort-by
+                   #'car #'<
+                   (cl-loop with parsed-months = nil
+                            for row across raw-data
+                            for month = (alist-get (cdar row) deterred-hledger-exchange--rosstat-months
+                                                   nil nil #'equal)
+                            when (and month (not (member month parsed-months)))
+                            append (cl-loop for datum in (cdr row)
+                                            for value = (/ (string-to-number (cdr datum)) 100.0)
+                                            for year = (string-to-number (symbol-name (car datum)))
+                                            for timestamp = (deterred-utils-parse-iso8601-dateonly
+                                                             (format "%s-%02d-01" year month))
+                                            when (and (>= timestamp start) (> value 0))
+                                            collect (cons timestamp value))
+                            and do (push month parsed-months)))))
+            (funcall callback
+                     (cl-loop with factor = 1
+                              for (timestamp . value) in data
+                              do (setq factor (* factor value))
+                              collect (cons timestamp factor)))))
+      ;; Cleanup temporary directory
+      (when (file-exists-p temp-dir)
+        (delete-directory temp-dir t)))))
+
 (defun deterred-hledger-exchange--get-saved-timestamp (filename)
   "Get last saved timestamp in a ledger market price file.
 
@@ -272,6 +335,21 @@ FILENAME has to be configured in `deterred-hledger-exchange-params'."
                                 (lambda (f) (or
                                              (directory-name-p f)
                                              (string-match-p (rx ".csv" eos) f)))))))
+            ('rosstat (lambda (callback)
+                        (deterred-hledger-exchange--parse-rosstat-cpi
+                         (or
+                          (deterred-utils-parse-iso8601-dateonly (elt params 1))
+                          (elt params 1))
+                         (time-convert nil 'integer)
+                         (lambda (data)
+                           (delete-file (elt params 0))
+                           (funcall callback data))
+                         :filename
+                         (read-file-name
+                          "Rosstat XLSX file: " nil nil t nil
+                          (lambda (f) (or
+                                       (directory-name-p f)
+                                       (string-match-p (rx ".xlsx" eos) f)))))))
             (_ (error "Wrong type: " (car (elt params 4)))))))
     (funcall update-fn
              (lambda (data)
