@@ -74,9 +74,9 @@
 ARGS is a list of command-line arguments."
   (unless (executable-find deterred-hledger-binary)
     (user-error "Hledger binary not found: %s" deterred-hledger-binary))
-  (let ((json-output (shell-command-to-string
-                      (concat deterred-hledger-binary " "
-                              (mapconcat #'shell-quote-argument args " ")))))
+  (let ((json-output (with-temp-buffer
+                       (apply #'call-process deterred-hledger-binary nil t nil args)
+                       (buffer-string))))
     (condition-case err
         (json-read-from-string json-output)
       (json-parse-error
@@ -106,8 +106,9 @@ end timestamp."
   (unless (executable-find deterred-hledger-binary)
     (user-error "Hledger binary not found: %s" deterred-hledger-binary))
   (deterred-hledger--with-cache 'range
-    (let* ((stats-output (shell-command-to-string
-                          (concat deterred-hledger-binary " stats")))
+    (let* ((stats-output (with-temp-buffer
+                           (call-process deterred-hledger-binary nil t nil "stats")
+                           (buffer-string)))
            (span-line (when (string-match "Txns span[ \t]*:[ \t]*\\([0-9-]+\\) to \\([0-9-]+\\)"
                                           stats-output)
                         (cons (match-string 1 stats-output)

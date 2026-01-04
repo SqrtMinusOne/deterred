@@ -43,14 +43,15 @@
                               for value in row
                               collect (cons key value)))))
 
-(defun deterred-utils-read-csv-with-python (file)
+(defun deterred-utils-read-csv-with-python (file &optional delimiter)
   "Read a CSV FILE into alist with python.
-
+DELIMITER defaults to comma, can be set to semicolon or other.
 This works better than `pcsv' for Reddit dump."
   (json-parse-string
    (shell-command-to-string
-    (format "cat %s | python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin)]))'"
-            (shell-quote-argument (expand-file-name file))))
+    (format "cat %s | python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin, delimiter=\"%s\")]))'"
+            (shell-quote-argument (expand-file-name file))
+            (or delimiter ",")))
    :object-type 'alist))
 
 (defun deterred-utils-ts-to-day-start (&optional timestamp)
@@ -110,6 +111,25 @@ the date to day end), or nil."
         ('from (deterred-utils-ts-to-day-start timestamp))
         ('to (deterred-utils-ts-to-day-end timestamp))
         (_ timestamp)))))
+
+(defun deterred-utils-parse-iso8601-dateonly (date-string)
+  "Convert YYYY-MM-DD DATE-STRING into UNIX timestamp."
+  (save-match-data
+    (when (string-match
+           (rx bos (group (= 4 num)) "-" (group (= 2 num)) "-" (group (= 2 num)))
+           date-string)
+      (time-convert
+       (encode-time
+        (list
+         0
+         0
+         0
+         (string-to-number (match-string 3 date-string))
+         (string-to-number (match-string 2 date-string))
+         (string-to-number (match-string 1 date-string))))
+       'integer))))
+
+(deterred-utils-parse-iso8601-dateonly "2016-01-01")
 
 (defvar deterred-utils-report-mode-map
   (let ((map (make-sparse-keymap)))
