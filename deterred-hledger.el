@@ -52,6 +52,13 @@
 (defvar deterred-hledger--cache (make-hash-table :test #'equal)
   "Caching variable.  See `deterred-hledger--with-cache'.")
 
+(defun deterred-hledger-cache-reset ()
+  "Reset DETERRED hledger cache.
+
+Useful for development."
+  (interactive)
+  (setq deterred-hledger--cache (make-hash-table :test #'equal)))
+
 ;;;###autoload
 (defclass deterred-hledger (deterred-source)
   ((name :initform "Finance (hledger)"))
@@ -83,6 +90,27 @@ ARGS is a list of command-line arguments."
        (error "Invalid JSON from hledger: %s"
               (error-message-string err))))))
 
+(defun deterred-hledger--call-csv (&rest args)
+  "Call hledger with ARGS and parse CSV output.
+
+ARGS is a list of command-line arguments."
+  (unless (executable-find deterred-hledger-binary)
+    (user-error "Hledger binary not found: %s" deterred-hledger-binary))
+  (let ((csv-output (with-temp-buffer
+                      (apply #'call-process deterred-hledger-binary nil t nil args)
+                      (buffer-string))))
+    (deterred-utils-read-csv-string-with-python csv-output)))
+
+(defun deterred-hledger--call (&rest args)
+  "Call hledger with ARGS and return the output.
+
+ARGS is a list of command-line arguments."
+  (unless (executable-find deterred-hledger-binary)
+    (user-error "Hledger binary not found: %s" deterred-hledger-binary))
+  (with-temp-buffer
+    (apply #'call-process deterred-hledger-binary nil t nil args)
+    (buffer-string)))
+
 (defmacro deterred-hledger--with-cache (key &rest body)
   "Cache the results until the hledger file is updated.
 
@@ -106,9 +134,7 @@ end timestamp."
   (unless (executable-find deterred-hledger-binary)
     (user-error "Hledger binary not found: %s" deterred-hledger-binary))
   (deterred-hledger--with-cache 'range
-    (let* ((stats-output (with-temp-buffer
-                           (call-process deterred-hledger-binary nil t nil "stats")
-                           (buffer-string)))
+    (let* ((stats-output (deterred-hledger--call "stats"))
            (span-line (when (string-match "Txns span[ \t]*:[ \t]*\\([0-9-]+\\) to \\([0-9-]+\\)"
                                           stats-output)
                         (cons (match-string 1 stats-output)

@@ -45,13 +45,31 @@
 
 (defun deterred-utils-read-csv-with-python (file &optional delimiter)
   "Read a CSV FILE into alist with python.
-DELIMITER defaults to comma, can be set to semicolon or other.
-This works better than `pcsv' for Reddit dump."
+
+DELIMITER defaults to comma, can be set to semicolon or other.  This
+works better than `pcsv' for Reddit dump."
   (json-parse-string
    (shell-command-to-string
     (format "cat %s | python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin, delimiter=\"%s\")]))'"
             (shell-quote-argument (expand-file-name file))
             (or delimiter ",")))
+   :object-type 'alist))
+
+(defun deterred-utils-read-csv-string-with-python (csv-content &optional delimiter)
+  "Read CSV-CONTENT into alist with python.
+
+CSV-CONTENT should be a string containing CSV data.  DELIMITER
+defaults to comma, can be set to semicolon or other."
+  (json-parse-string
+   (with-temp-buffer
+     (insert csv-content)
+     (shell-command-on-region
+      (point-min)
+      (point-max)
+      (format "python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin, delimiter=\"%s\")]))'"
+              (or delimiter ","))
+      t t)
+     (buffer-string))
    :object-type 'alist))
 
 (defun deterred-utils-ts-to-day-start (&optional timestamp)
@@ -128,8 +146,6 @@ the date to day end), or nil."
          (string-to-number (match-string 2 date-string))
          (string-to-number (match-string 1 date-string))))
        'integer))))
-
-(deterred-utils-parse-iso8601-dateonly "2016-01-01")
 
 (defvar deterred-utils-report-mode-map
   (let ((map (make-sparse-keymap)))
