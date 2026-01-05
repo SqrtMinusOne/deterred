@@ -39,7 +39,8 @@
   '((:start-date)
     (:end-date)
     (:projects)
-    (:n-top-projects . 5)))
+    (:n-top-projects . 5)
+    (:folders-to-compare)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-wakatime))
   "Render the parameters section for the WakaTime dashboard."
@@ -67,7 +68,65 @@
   (deterred-dashboard-widget-number
    :name "Top N projects"
    :key :n-top-projects)
+  (insert "\n")
+  (let* ((db (deterred-db--init))
+         (project-roots (deterred-db-select-alist
+                         db "SELECT DISTINCT project_root FROM wakatime_projects
+WHERE project_root IS NOT NULL AND name != 'Unknown Project'"))
+         (folders (make-hash-table :test 'equal)))
+    ;; Collect all parent folders
+    (dolist (root project-roots)
+      (let* ((path (alist-get 'project_root root))
+             (parts (file-name-split path)))
+        (cl-loop for i from 1 to (1- (seq-length parts))
+                 for folder = (apply #'file-name-concat "/" (seq-take parts i))
+                 do (puthash folder t folders))))
+    (let ((folder-options (sort (hash-table-keys folders) #'string<)))
+      (deterred-dashboard-widget-completing-read-multiple
+       :name "Folders to compare"
+       :key :folders-to-compare
+       :options (mapcar (lambda (f) (cons f f)) folder-options))))
   (insert "\n"))
+
+(defun deterred-dashboard-wakatime--fetch-hours-by-folder (db params folders period)
+  "Fetch hours grouped by folder and time period.
+
+DB is the database connection.
+PARAMS are the dashboard parameters.
+FOLDERS is a list of folder paths to compare.
+PERIOD is either 'month or 'year."
+  (let* ((time-format (if (eq period 'month) "%Y-%m" "%Y"))
+         (time-column (if (eq period 'month) "month" "year"))
+         ;; Sort folders by length (longest first) for proper matching
+         (sorted-folders (sort (copy-sequence folders) (lambda (a b) (> (length a) (length b)))))
+         ;; Build CASE statement for folder matching
+         (case-stmt
+          (concat
+           "CASE\n"
+           (mapconcat
+            (lambda (folder)
+              (format "  WHEN wp.project_root LIKE '%s%%' THEN '%s'"
+                      (replace-regexp-in-string "'" "''" folder)  ; Escape single quotes
+                      (replace-regexp-in-string "'" "''" folder)))
+            sorted-folders
+            "\n")
+           "\nEND")))
+    ;; Query with folder grouping in SQL
+    (deterred-db-select-template-alist
+     db
+     (format "SELECT
+  strftime('%s', wgt.timestamp, 'unixepoch') %s,
+  %s AS folder,
+  CAST(sum(wgt.total_seconds) / (60 * 60) * 100 AS integer) / 100.0 hours
+FROM wakatime_grand_total wgt
+INNER JOIN wakatime_projects wp ON wp.id = wgt.project_id
+WHERE wp.project_root IS NOT NULL AND wp.name != 'Unknown Project'
+  AND (%s) IS NOT NULL
+[[AND wgt.timestamp >= :start-date]] [[AND wgt.timestamp <= :end-date]]
+[[AND wgt.project_id IN :projects]]
+GROUP BY strftime('%s', wgt.timestamp, 'unixepoch'), folder
+ORDER BY %s ASC" time-format time-column case-stmt case-stmt time-format time-column)
+     params)))
 
 (cl-defmethod deterred-dashboard-list-datasets ((_dashboard deterred-dashboard-wakatime))
   "List datasets for the WakaTime dashboard."
@@ -84,6 +143,8 @@
     (top-days (name . "Top days"))
     (top-weeks (name . "Top weeks"))
     (top-months (name . "Top months"))
+    (hours-by-folder-per-month (name . "Hours by folder per month"))
+    (hours-by-folder-per-year (name . "Hours by folder per year"))
     (numbers-data (name . "Numerical data"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-wakatime)
@@ -351,6 +412,14 @@ GROUP BY strftime('%Y-%m', wgt.timestamp, 'unixepoch')
 ORDER BY hours DESC
 LIMIT 20"
            params))
+      (hours-by-folder-per-month
+       . ,(when-let ((folders (alist-get :folders-to-compare params)))
+            (deterred-dashboard-wakatime--fetch-hours-by-folder
+             db params folders 'month)))
+      (hours-by-folder-per-year
+       . ,(when-let ((folders (alist-get :folders-to-compare params)))
+            (deterred-dashboard-wakatime--fetch-hours-by-folder
+             db params folders 'year)))
       (numbers-data . ,numbers-data))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-wakatime)
@@ -494,6 +563,96 @@ print(json.dumps(images))"
       (deterred-format (f-h3 "Average project age per month") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 4))
      (insert "\n")))
+  ;; Folder comparison charts
+  (when (and (alist-get 'hours-by-folder-per-month data)
+             (alist-get 'data (alist-get 'hours-by-folder-per-month data))
+             (> (length (alist-get 'data (alist-get 'hours-by-folder-per-month data))) 0))
+    (insert (deterred-format (f-h2 "Folder comparison") "\n"))
+    (deterred-dashboard-exec-python
+     :python-code
+     "from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from deterred import fig_to_b64
+
+import pandas as pd
+import numpy as np
+
+import json
+import os
+import base64
+import io
+
+data = json.loads(input())
+images = []
+
+def remove_common_prefix(folders):
+    \"\"\"Remove common prefix from folder paths.\"\"\"
+    if not folders or len(folders) == 1:
+        return folders
+
+    # Find common prefix
+    common_prefix = os.path.commonprefix(list(folders))
+    # Ensure we end at a directory boundary
+    if common_prefix and not common_prefix.endswith('/'):
+        common_prefix = common_prefix.rsplit('/', 1)[0] + '/'
+
+    # Remove common prefix from all folders
+    if common_prefix and common_prefix != '/':
+        return [f[len(common_prefix):] if f.startswith(common_prefix) else f for f in folders]
+    return folders
+
+if data.get('hours-by-folder-per-year') and data['hours-by-folder-per-year'].get('data') and len(data['hours-by-folder-per-year']['data']) > 0:
+    df_year = pd.DataFrame(data['hours-by-folder-per-year']['data'])
+    df_year_pivot = df_year.pivot(index='year', columns='folder', values='hours').fillna(0)
+
+    # Remove common prefix from column names
+    new_columns = remove_common_prefix(df_year_pivot.columns.tolist())
+    df_year_pivot.columns = new_columns
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_year_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Hours by folder per year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Hours')
+    ax.legend(title='Folder', loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=min(2, len(new_columns)))
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+if data.get('hours-by-folder-per-month') and data['hours-by-folder-per-month'].get('data') and len(data['hours-by-folder-per-month']['data']) > 0:
+    df_month = pd.DataFrame(data['hours-by-folder-per-month']['data'])
+    df_month_pivot = df_month.pivot(index='month', columns='folder', values='hours').fillna(0)
+
+    # Remove common prefix from column names
+    new_columns = remove_common_prefix(df_month_pivot.columns.tolist())
+    df_month_pivot.columns = new_columns
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_month_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Hours by folder per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Hours')
+    if len(df_month_pivot) > 30:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+    ax.legend(title='Folder', loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=min(2, len(new_columns)))
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+print(json.dumps(images))"
+     :input data
+     :on-success
+     (lambda (images)
+       (when (elt images 0)
+         (insert (deterred-format (f-h3 "Hours by folder per year") "\n"))
+         (deterred-dashboard-print-images-base64 (elt images 0))
+         (insert "\n"))
+       (when (elt images 1)
+         (insert (deterred-format (f-h3 "Hours by folder per month") "\n"))
+         (deterred-dashboard-print-images-base64 (elt images 1))
+         (insert "\n")))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"
                     (f-h3 "Top months") "\n")

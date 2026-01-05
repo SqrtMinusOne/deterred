@@ -547,7 +547,12 @@ PROMPT is passed to `completing-read', SEPARATOR is bound to
               :notify
               (lambda (widget &rest _)
                 (let* ((crm-separator ,separator)
-                       (selected (completing-read-multiple ,prompt ,options))
+                       (selected (completing-read-multiple
+                                  ,prompt ,options nil nil
+                                  (when current-prefix-arg
+                                    (string-join
+                                     (alist-get ,key deterred-dashboard-params)
+                                     crm-separator))))
                        (value (deterred-dashboard--process-completing-read
                                selected ,options)))
                   (deterred-dashboard--widget-render-option widget selected)
