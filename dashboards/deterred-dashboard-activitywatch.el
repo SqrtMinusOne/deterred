@@ -39,7 +39,8 @@
   '((:start-date)
     (:end-date)
     (:hostname)
-    (:n-top-apps . 5)))
+    (:n-top-apps . 5)
+    (:recent-days . 14)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-activitywatch))
   "Render the parameters section for the ActivityWatch dashboard."
@@ -67,6 +68,10 @@
   (deterred-dashboard-widget-number
    :name "Top N apps"
    :key :n-top-apps)
+  (insert "\n")
+  (deterred-dashboard-widget-number
+   :name "Recent days for heatmaps"
+   :key :recent-days)
   (insert "\n"))
 
 (cl-defmethod deterred-dashboard-list-datasets ((_dashboard deterred-dashboard-activitywatch))
@@ -84,6 +89,8 @@
     (apps-discovered (name . "Apps discovered per year"))
     (new-apps-per-year (name . "Hours in new vs. old apps per year"))
     (average-app-age-per-month (name . "Average app age per month"))
+    (recent-notafk-per-hostname-per-day (name . "Recent not-AFK hours per hostname per day"))
+    (recent-notafk-per-hour (name . "Recent not-AFK hours by time of day"))
     (numbers-data (name . "Numerical data"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-activitywatch)
@@ -355,6 +362,36 @@ FROM app_data
 GROUP BY month
 ORDER BY month ASC"
            params))
+      (recent-notafk-per-hostname-per-day
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  day,
+  hostname,
+  round(sum(total_duration) / (60.0 * 60.0), 2) hours
+FROM activitywatch_currentwindow_agg
+WHERE day >= date(COALESCE(:end-date, strftime('%s', 'now')), 'unixepoch', '-' || :recent-days || ' days')
+  [[AND day >= date(:start-date, 'unixepoch')]]
+  [[AND day <= date(:end-date, 'unixepoch')]]
+  [[AND hostname IN :hostname]]
+GROUP BY day, hostname
+ORDER BY day ASC"
+           params))
+      (recent-notafk-per-hour
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  date(notafk_start_timestamp, 'unixepoch') day,
+  notafk_start_timestamp start_time,
+  notafk_end_timestamp end_time,
+  hostname
+FROM activitywatch_notafk_period
+WHERE date(notafk_start_timestamp, 'unixepoch') >= date(COALESCE(:end-date, strftime('%s', 'now')), 'unixepoch', '-' || :recent-days || ' days')
+  [[AND date(notafk_start_timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(notafk_start_timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND hostname IN :hostname]]
+ORDER BY notafk_start_timestamp ASC"
+           params))
       (numbers-data . ,numbers-data))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-activitywatch)
@@ -520,6 +557,140 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Average app age per month") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 2))
      (insert "\n")))
+  (insert (deterred-format (f-h2 "Recent Activity") "\n"))
+  (deterred-dashboard-exec-python
+   :python-code
+   "from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Rectangle
+from deterred import fig_to_b64
+import matplotlib.patches as mpatches
+from datetime import datetime, timedelta
+
+import pandas as pd
+import numpy as np
+
+import json
+
+data = json.loads(input())
+df_hostname_day = pd.DataFrame(data['recent-notafk-per-hostname-per-day']['data'])
+df_intervals = pd.DataFrame(data['recent-notafk-per-hour']['data'])
+
+images = []
+
+# Chart 1: Not-AFK hours per hostname per day (stacked bar chart)
+if not df_hostname_day.empty:
+    fig, ax = plt.subplots(figsize=(10, 5))
+    df_pivot = df_hostname_day.pivot(index='day', columns='hostname', values='hours').fillna(0)
+    df_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Not-AFK hours per hostname (last N days)')
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Hours')
+    ax.legend(title='Hostname')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Chart 2: Activity intervals by time of day
+if not df_intervals.empty:
+    # Get unique days and hostnames
+    all_days = sorted(df_intervals['day'].unique())
+    hostnames = df_intervals['hostname'].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(hostnames)))
+    hostname_colors = dict(zip(hostnames, colors))
+
+    # Create day to x-position mapping
+    day_to_x = {day: i for i, day in enumerate(all_days)}
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    # Plot rectangles for each interval
+    for _, row in df_intervals.iterrows():
+        start_dt = datetime.fromtimestamp(row['start_time'])
+        end_dt = datetime.fromtimestamp(row['end_time'])
+
+        start_day = start_dt.date().isoformat()
+        end_day = end_dt.date().isoformat()
+
+        color = hostname_colors[row['hostname']]
+
+        if start_day == end_day:
+            # Interval within same day
+            if start_day in day_to_x:
+                x_pos = day_to_x[start_day]
+                start_hour = start_dt.hour + start_dt.minute / 60.0 + start_dt.second / 3600.0
+                end_hour = end_dt.hour + end_dt.minute / 60.0 + end_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, start_hour),
+                                 0.8,
+                                 end_hour - start_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+        else:
+            # Interval crosses midnight - split into two rectangles
+            # First part: from start_time to midnight
+            if start_day in day_to_x:
+                x_pos = day_to_x[start_day]
+                start_hour = start_dt.hour + start_dt.minute / 60.0 + start_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, start_hour),
+                                 0.8,
+                                 24 - start_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+
+            # Second part: from midnight to end_time
+            if end_day in day_to_x:
+                x_pos = day_to_x[end_day]
+                end_hour = end_dt.hour + end_dt.minute / 60.0 + end_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, 0),
+                                 0.8,
+                                 end_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+
+    # Create legend
+    legend_elements = [mpatches.Patch(facecolor=hostname_colors[h],
+                                      alpha=0.6,
+                                      label=h)
+                      for h in hostnames]
+    ax.legend(handles=legend_elements, title='Hostname')
+
+    ax.set_title('Activity intervals by time of day (last N days)')
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Hour of day')
+    ax.set_xlim(-0.5, len(all_days) - 0.5)
+    ax.set_ylim(0, 24)
+    ax.set_xticks(range(len(all_days)))
+    ax.set_xticklabels(all_days, rotation=45, ha='right')
+    ax.set_yticks(range(0, 25))
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+print(json.dumps(images))"
+   :input data
+   :on-success
+   (lambda (images)
+     (when (elt images 0)
+       (insert (deterred-format (f-h3 "Not-AFK hours per hostname (last N days)") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 0))
+       (insert "\n"))
+     (when (elt images 1)
+       (insert (deterred-format (f-h3 "Activity by time of day") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 1))
+       (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"
                     (f-h3 "Top months") "\n")

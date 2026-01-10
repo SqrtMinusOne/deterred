@@ -39,7 +39,8 @@
     (:end-date)
     (:artist)
     (:album)
-    (:n-top-artists . 5)))
+    (:n-top-artists . 5)
+    (:recent-days . 14)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-mpd))
   "Render the parameters section for the MPD dashboard."
@@ -78,6 +79,10 @@
     (deterred-dashboard-widget-number
      :name "Top N artists"
      :key :n-top-artists)
+    (insert "\n")
+    (deterred-dashboard-widget-number
+     :name "Recent days for heatmaps"
+     :key :recent-days)
     (insert "\n")))
 
 (cl-defmethod deterred-dashboard-list-datasets ((_dashboard deterred-dashboard-mpd))
@@ -99,7 +104,9 @@
     (top-weeks (name . "Top weeks by listened time"))
     (top-months (name . "Top months by listened time"))
     (listened-to-top-by-month (name . "Hours listened to top N artists by month"))
-    (artist-comparison-by-year (name . "Artist comparison by year"))))
+    (artist-comparison-by-year (name . "Artist comparison by year"))
+    (recent-listened-per-hostname-per-day (name . "Recent hours listened per hostname per day"))
+    (recent-listened-per-hour (name . "Recent listening intervals by time of day"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-mpd)
                                                  params)
@@ -485,6 +492,40 @@ LEFT JOIN year_totals yt ON yt.year = aby.year
 GROUP BY aby.album_artist
 ORDER BY current_year_hours DESC
 LIMIT 20"
+           params))
+      (recent-listened-per-hostname-per-day
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  date(msl.timestamp, 'unixepoch') day,
+  msl.hostname,
+  round(sum(ms.duration) / (60.0 * 60.0), 2) hours
+FROM mpd_song_listened msl
+INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+WHERE date(msl.timestamp, 'unixepoch') >= date(COALESCE(:end-date, strftime('%s', 'now')), 'unixepoch', '-' || :recent-days || ' days')
+  [[AND date(msl.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(msl.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND ms.album_artist IN :artist]]
+  [[AND ms.album IN :album]]
+GROUP BY date(msl.timestamp, 'unixepoch'), msl.hostname
+ORDER BY day ASC"
+           params))
+      (recent-listened-per-hour
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  date(msl.timestamp, 'unixepoch') day,
+  msl.timestamp start_time,
+  msl.timestamp + ms.duration end_time,
+  msl.hostname
+FROM mpd_song_listened msl
+INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+WHERE date(msl.timestamp, 'unixepoch') >= date(COALESCE(:end-date, strftime('%s', 'now')), 'unixepoch', '-' || :recent-days || ' days')
+  [[AND date(msl.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(msl.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND ms.album_artist IN :artist]]
+  [[AND ms.album IN :album]]
+ORDER BY msl.timestamp ASC"
            params)))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-mpd)
@@ -789,7 +830,143 @@ images.append(fig_to_b64(fig))
 print(json.dumps(images))"
    :input data
    :on-success
-   #'deterred-dashboard-print-images-base64))
+   #'deterred-dashboard-print-images-base64)
+  (insert "\n" (deterred-format (f-h2 "Recent Activity") "\n"))
+
+  (deterred-dashboard-exec-python
+   :python-code
+   "from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from matplotlib.patches import Rectangle
+from deterred import fig_to_b64
+import matplotlib.patches as mpatches
+from datetime import datetime, timedelta
+
+import pandas as pd
+import numpy as np
+
+import json
+
+data = json.loads(input())
+df_hostname_day = pd.DataFrame(data['recent-listened-per-hostname-per-day']['data'])
+df_intervals = pd.DataFrame(data['recent-listened-per-hour']['data'])
+
+images = []
+
+# Chart 1: Hours listened per hostname per day (stacked bar chart)
+if not df_hostname_day.empty:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_hostname_day['hostname'] = df_hostname_day['hostname'].astype(str)
+    df_pivot = df_hostname_day.pivot(index='day', columns='hostname', values='hours').fillna(0)
+    df_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Hours listened per hostname (last N days)')
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Hours')
+    ax.legend(title='Hostname')
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Chart 2: Listening intervals by time of day
+if not df_intervals.empty:
+    # Get unique days and hostnames
+    all_days = sorted(df_intervals['day'].unique())
+    hostnames = df_intervals['hostname'].unique()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(hostnames)))
+    hostname_colors = dict(zip(hostnames, colors))
+
+    # Create day to x-position mapping
+    day_to_x = {day: i for i, day in enumerate(all_days)}
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    # Plot rectangles for each interval
+    for _, row in df_intervals.iterrows():
+        start_dt = datetime.fromtimestamp(row['start_time'])
+        end_dt = datetime.fromtimestamp(row['end_time'])
+
+        start_day = start_dt.date().isoformat()
+        end_day = end_dt.date().isoformat()
+
+        color = hostname_colors[row['hostname']]
+
+        if start_day == end_day:
+            # Interval within same day
+            if start_day in day_to_x:
+                x_pos = day_to_x[start_day]
+                start_hour = start_dt.hour + start_dt.minute / 60.0 + start_dt.second / 3600.0
+                end_hour = end_dt.hour + end_dt.minute / 60.0 + end_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, start_hour),
+                                 0.8,
+                                 end_hour - start_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+        else:
+            # Interval crosses midnight - split into two rectangles
+            # First part: from start_time to midnight
+            if start_day in day_to_x:
+                x_pos = day_to_x[start_day]
+                start_hour = start_dt.hour + start_dt.minute / 60.0 + start_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, start_hour),
+                                 0.8,
+                                 24 - start_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+
+            # Second part: from midnight to end_time
+            if end_day in day_to_x:
+                x_pos = day_to_x[end_day]
+                end_hour = end_dt.hour + end_dt.minute / 60.0 + end_dt.second / 3600.0
+
+                rect = Rectangle((x_pos - 0.4, 0),
+                                 0.8,
+                                 end_hour,
+                                 facecolor=color,
+                                 alpha=0.6,
+                                 edgecolor='none')
+                ax.add_patch(rect)
+
+    # Create legend
+    legend_elements = [mpatches.Patch(facecolor=hostname_colors[h],
+                                      alpha=0.6,
+                                      label=h)
+                      for h in hostnames]
+    ax.legend(handles=legend_elements, title='Hostname')
+
+    ax.set_title('Listening intervals by time of day (last N days)')
+    ax.set_xlabel('Day')
+    ax.set_ylabel('Hour of day')
+    ax.set_xlim(-0.5, len(all_days) - 0.5)
+    ax.set_ylim(0, 24)
+    ax.set_xticks(range(len(all_days)))
+    ax.set_xticklabels(all_days, rotation=45, ha='right')
+    ax.set_yticks(range(0, 25))
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+print(json.dumps(images))"
+   :input data
+   :on-success
+   (lambda (images)
+     (when (elt images 0)
+       (insert (deterred-format (f-h3 "Hours listened per hostname (last N days)") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 0))
+       (insert "\n"))
+     (when (elt images 1)
+       (insert (deterred-format (f-h3 "Listening intervals by time of day") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 1))
+       (insert "\n")))))
 
 (provide 'deterred-dashboard-mpd)
 ;;; deterred-dashboard-mpd.el ends here

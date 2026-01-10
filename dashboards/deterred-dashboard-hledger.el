@@ -80,7 +80,8 @@ This makes sense for the following commands:
     (:notes)
     (:codes)
     (:status)
-    (:types)))
+    (:types)
+    (:sort-amount)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dasbhoard deterred-dashboard-hledger))
   "Render the parameters section for the hledger dashboard."
@@ -145,10 +146,16 @@ This makes sense for the following commands:
    :name "Type"
    :key :types
    :options (deterred-dashboard-hledger--get-types))
-  (insert "\n"))
+  (insert "\n")
+  (deterred-dashboard-widget-checkbox
+   :name "Sort reports by amount"
+   :key :sort-amount))
 
-(defun deterred-dashboard-hledger--params-to-flags (params)
+(defun deterred-dashboard-hledger--params-to-flags (params &optional quote-file)
   "Convert PARAMS to hledger flags.
+
+If QUOTE-FILE is non-nil, add quotes to the file argument.  This is
+useful for debugging the command in CLI.
 
 PARAMS is as returned by `deterred-dashboard-default-params'."
   (let (flags)
@@ -160,8 +167,14 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
       (push (format "--exchange=%s" d) flags)
       (dolist (param deterred-hledger-exchange-params)
         (when (file-exists-p (car param))
-          (push (format "--file=%s" (car param)) flags)))
-      (push (format "--file=%s" deterred-hledger-file) flags))
+          (push (if quote-file
+                    (format "--file=\"%s\"" (car param))
+                  (format "--file=%s" (car param)))
+                flags)))
+      (push (if quote-file
+                (format "--file=\"%s\"" deterred-hledger-file)
+              (format "--file=%s" deterred-hledger-file))
+            flags))
     flags))
 
 (defun deterred-dashboard-hledger--format-query-item (key values)
@@ -289,13 +302,14 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
   (let* ((query (deterred-dashboard-hledger--params-to-query params))
          (flags (deterred-dashboard-hledger--params-to-flags params))
          (args `(,@flags ,@(when query (list query))))
-         (cache-key (prin1-to-string args)))
+         (args-sort `(,@args ,@(when (alist-get :sort-amount params) (list "-S"))))
+         (cache-key (prin1-to-string args-sort)))
     `((bs . ,(deterred-hledger--with-cache (format "bs-%s" cache-key)
-               (apply #'deterred-hledger--call "bs" "--layout=tall" args)))
+               (apply #'deterred-hledger--call "bs" "--layout=tall" args-sort)))
       (is . ,(deterred-hledger--with-cache (format "is-%s" cache-key)
-               (apply #'deterred-hledger--call "is" "--layout=tall" args)))
+               (apply #'deterred-hledger--call "is" "--layout=tall" args-sort)))
       (is-desc . ,(deterred-hledger--with-cache (format "is-desc-%s" cache-key)
-                    (apply #'deterred-hledger--call "is" "--pivot=desc" "--layout=tall" args)))
+                    (apply #'deterred-hledger--call "is" "--pivot=desc" "--layout=tall" args-sort)))
       (net-worth-by-month
        . ,(deterred-hledger--with-cache (format "nw-by-month-%s" cache-key)
             (let* ((data (apply #'deterred-hledger--call-json "bs" "-M" "-O" "json" args))
@@ -388,7 +402,7 @@ def plot_income_statement(df_data, title, is_yearly=False):
     df_expenses = df[expense_cols] * -1
     df_revenues = df[revenue_cols]
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     # Plot stacked bars for expenses (below axis)
     df_expenses.plot(ax=ax, kind='bar', stacked=True,
@@ -439,6 +453,16 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Income Statement by Year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n"))))
+
+(defun deterred-dashboard-hledger-kill-command (params)
+  "Kill an hledger command with parameters from the dashboard.
+
+PARAMS are dashboard parameters."
+  (interactive (list deterred-dashboard-params))
+  (let* ((query (deterred-dashboard-hledger--params-to-query params))
+         (flags (deterred-dashboard-hledger--params-to-flags params t))
+         (args `(,@flags ,@(when query (list query)))))
+    (kill-new (string-join `("hledger" ,@args) " "))))
 
 (provide 'deterred-dashboard-hledger)
 ;;; deterred-dashboard-hledger.el ends here
