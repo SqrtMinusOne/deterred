@@ -98,6 +98,7 @@ ORDER BY name")))
     (top-group-chats (name . "Top group chats"))
     (top-group-chat-users (name . "Top users in group chats"))
     (top-chats-per-month (name . "Top N chats per month"))
+    (top-group-chats-per-month (name . "Top N group chats per month"))
     (top-messengers (name . "Top messengers"))
     (messenger-per-year (name . "Messages per messenger per year"))
     (top-days (name . "Top days by sent messages"))
@@ -336,6 +337,38 @@ WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch'), mc.name
 ORDER BY month ASC"
            (append params `((:my-id . ,my-id)))))
+      (top-group-chats-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH top_chats AS (
+  SELECT
+    mc.name,
+    count(*) total
+  FROM messenger_message mm
+  INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+  WHERE mc.type = 'group'
+    [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mm.messenger IN :messenger]]
+  GROUP BY mc.name
+  ORDER BY total DESC
+  LIMIT :n-top-chats
+)
+SELECT
+  strftime('%Y-%m', mm.timestamp, 'unixepoch') month,
+  mc.name,
+  sum(CASE WHEN mm.sender_id = :my-id THEN 1 ELSE 0 END) sent,
+  sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received
+FROM messenger_message mm
+INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
+  [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mm.messenger IN :messenger]]
+GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch'), mc.name
+ORDER BY month ASC"
+           (append params `((:my-id . ,my-id)))))
       (top-messengers
        . ,(deterred-db-select-template-alist
            db
@@ -496,6 +529,7 @@ df_month = pd.DataFrame(data['sent-received-per-month']['data'])
 df_personal_month = pd.DataFrame(data['personal-sent-received-per-month']['data'])
 df_group_month = pd.DataFrame(data['group-sent-received-per-month']['data'])
 df_top_chats = pd.DataFrame(data['top-chats-per-month']['data'])
+df_top_group_chats = pd.DataFrame(data['top-group-chats-per-month']['data'])
 df_messenger_year = pd.DataFrame(data['messenger-per-year']['data'])
 
 images = []
@@ -505,7 +539,9 @@ def plot_sent_received(ax, df, x_col, title):
     if len(df) == 0:
         return
     x = df[x_col]
-    sent = -df['sent']  # Negative for below X axis
+    # If there are no received messages, display sent above X axis
+    has_received = df['received'].sum() > 0
+    sent = -df['sent'] if has_received else df['sent']
     received = df['received']
 
     width = 0.8
@@ -575,6 +611,28 @@ else:
     images.append(None)
     images.append(None)
 
+# Top group chats per month - sent
+if len(df_top_group_chats) > 0:
+    df_top_group_chats_sent = df_top_group_chats.pivot(index='month', columns='name', values='sent').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_top_group_chats_sent.plot(ax=ax, kind='line')
+    ax.set_title('Messages sent in top N group chats per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Messages sent')
+    images.append(fig_to_b64(fig))
+
+    # Top group chats per month - received
+    df_top_group_chats_received = df_top_group_chats.pivot(index='month', columns='name', values='received').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_top_group_chats_received.plot(ax=ax, kind='line')
+    ax.set_title('Messages received in top N group chats per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Messages received')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+    images.append(None)
+
 # Messenger per year - sent
 if len(df_messenger_year) > 0:
     df_messenger_sent = df_messenger_year.pivot(index='year', columns='messenger', values='sent').fillna(0)
@@ -628,12 +686,20 @@ print(json.dumps(images))"
        (deterred-dashboard-print-images-base64 (elt images 7))
        (insert "\n"))
      (when (elt images 8)
-       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 8))
        (insert "\n"))
      (when (elt images 9)
-       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages received in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 9))
+       (insert "\n"))
+     (when (elt images 10)
+       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 10))
+       (insert "\n"))
+     (when (elt images 11)
+       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 11))
        (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"

@@ -47,7 +47,7 @@
   "d9536b80-3213-4321-b37f-ebf1b558a530")
 
 (defconst deterred-messengers-messenger-list
-  '("telegram" "vk")
+  '("telegram" "vk" "discord")
   "List of supported messenger names.")
 
 (defcustom deterred-messengers-my-id nil
@@ -1120,6 +1120,180 @@ or all messages if this is the first import."
            '(messenger_chat messenger_user messenger_message))
 
           (message "Successfully imported telega data: %d messages" (length messages)))))))
+
+(defun deterred-messengers-discord--parse-name (index-name)
+  "Extract name and type from Discord chat INDEX-NAME.
+
+INDEX-NAME is a value from the Discord messages dump index file, which
+is a dict mapping chat ids to their names.
+
+For group chats, this returns:
+- name - server name or \"Unknown group chat\"
+- subgroup-name - channel name, which can be \"Unknown Channel\" if
+  the user has left the server.
+- type - `group'.
+
+And for personal chats:
+- name - other user's name, which is unfortunately not their readable
+  name but a username.
+- type - `personal_chat'."
+  (save-match-data
+    ;; <channel-name> in <server-name>, return server-name
+    (or (when (string-match
+               (rx bos (group (* nonl)) " in " (group (* nonl))) index-name)
+          `((name . ,(match-string 2 index-name))
+            (subgroup-name . ,(match-string 1 index-name))
+            (type . group)))
+        ;; Direct message with <user-name>, return user-name
+        (when (string-match (rx bos "Direct message with " (group (* nonl)))
+                            index-name)
+          `((name . ,(match-string 1 index-name))
+            (type . personal_chat)))
+        (when (or (equal "Unknown channel" index-name)
+                  (equal "None" index-name) )
+          `((name . "Unknown group chat")
+            (type . group)))
+        `((name . ,index-name)
+          (type . group)))))
+
+(defun deterred-messengers-discord--parse-my-id (directory index)
+  "Extract the discord ID of the user who has made the dump.
+
+Return a number.
+
+DIRECTORY is the dump folder, INDEX is the contents of the index
+file.  This works by finding a common participant ID in two direct
+message chats.  I'm not sure if it can work for any Discord dump, but
+it works for me."
+  (cl-block search-loop
+    (let (prev-participants)
+      (dolist (item index)
+        (let ((channel-data
+               (json-read-file
+                (concat directory (format "c%s/channel.json" (car item))))))
+          (when (and (equal (alist-get 'type channel-data) "DM")
+                     (> (seq-length (alist-get 'recipients channel-data)) 1))
+            (if prev-participants
+                (let ((me (seq-intersection
+                           (alist-get 'recipients channel-data) prev-participants)))
+                  (unless (= 1 (seq-length me))
+                    (error "Can't find me! Intersection: %s" me))
+                  (cl-return-from search-loop (string-to-number (car me))))
+              (setq prev-participants (alist-get 'recipients channel-data)))))))))
+
+(defun deterred-messengers-discord--parse-folder (directory)
+  "Parse discord dump DIRECTORY.
+
+Return an alist with the following keys:
+- users
+- chats
+- messages
+ready to be inserted into the database."
+  (let* ((index (json-read-file (concat directory "index.json")))
+         (my-id (deterred-messengers-discord--parse-my-id directory index))
+         (db (deterred-db--init))
+         (user-cache (deterred-messengers--load-users-by-messenger db "discord"))
+         (chat-cache (deterred-messengers--load-chats-by-messenger db "discord"))
+         user-data chat-data messages-data
+         (chat-discord-id-by-name (make-hash-table :test #'equal))
+         (me (car (deterred-db-select-alist
+                   db "SELECT * FROM messenger_user WHERE id = ?"
+                   (list deterred-messengers-my-id)))))
+    ;; Insert myself into `user-data'
+    (puthash my-id deterred-messengers-my-id user-cache)
+    (unless me
+      (setq me `((id . ,deterred-messengers-my-id)
+                 (name . "Me"))))
+    (setf (alist-get 'discord_id me) my-id)
+    (push me user-data)
+
+    ;; Processing chats one by one
+    (dolist (index-value index)
+      (pcase-let ((`(,key . ,name) index-value))
+        (let* ((chat-id (string-to-number (symbol-name key)))
+               (chat-directory (concat directory (format "c%s/" key)))
+               (channel-dump (json-read-file (concat chat-directory "channel.json")))
+               (messages-dump (json-read-file (concat chat-directory "messages.json")))
+               (name-data (deterred-messengers-discord--parse-name name))
+               other-user-id found-server)
+          ;; If it's a personal chat, determine the counterpart
+          (when (eq (alist-get 'type name-data) 'personal_chat)
+            (let ((other-ids (seq-difference
+                              (mapcar #'string-to-number
+                                      (alist-get 'recipients channel-dump))
+                              (list my-id))))
+              (unless (= (seq-length other-ids) 1)
+                (error "Something weird with %s: %d participants"
+                       chat-directory (seq-length other-ids)))
+              (let ((user
+                     (deterred-messengers--get-or-create-user
+                      user-cache "discord" (car other-ids)
+                      (alist-get 'name name-data))))
+                (push user user-data)
+                (setq other-user-id (alist-get 'id user)))))
+          ;; If it's a server that's been seen before, use the
+          ;; previous found chat-id
+          (if-let ((prev-id
+                    (gethash (alist-get 'name name-data) chat-discord-id-by-name)))
+              (setq chat-id prev-id
+                    found-server t)
+            (puthash (alist-get 'name name-data) chat-id chat-discord-id-by-name))
+          (let ((chat (deterred-messengers--get-or-create-chat
+                       chat-cache "discord" chat-id (alist-get 'name name-data)
+                       (alist-get 'type name-data) other-user-id)))
+            (unless found-server
+              (push chat chat-data))
+            (push
+             (mapcar
+              (lambda (m)
+                `((id . ,(deterred-messengers--id "discord" (alist-get 'ID m)))
+                  (timestamp . ,(time-convert
+                                 (encode-time
+                                  (iso8601-parse
+                                   (string-replace " " "T" (alist-get 'Timestamp m))))
+                                 'integer))
+                  (sender_id . ,deterred-messengers-my-id)
+                  (messenger . "discord")
+                  (chat_id . ,(alist-get 'id chat))
+                  (content . ,(alist-get 'Contents m))
+                  (discord_id . ,(alist-get 'ID m))
+                  (is_attachment . 0)))
+              messages-dump)
+             messages-data)))))
+    `((users . ,user-data)
+      (chats . ,chat-data)
+      (messages . ,(apply #'append messages-data)))))
+
+(defun deterred-messenger-load-discord-directory (directory)
+  "Load Discord export DIRECTORY into DETERRED.
+
+The directory has to have an index.json file, mapping chat ids to
+names, and folders like c<chat-id>.  Each folder has to have the
+following files:
+- channel.json
+- messages.json"
+  (interactive "DDiscord export directory: ")
+  (let ((data (deterred-messengers-discord--parse-folder directory))
+        (db (deterred-db--init)))
+    (with-sqlite-transaction db
+      (deterred-db-insert-unsafe
+       db
+       :table-name 'messenger_user
+       :values (alist-get 'users data)
+       :conflict-action 'do-update
+       :conflict-attrs '(id))
+      (deterred-db-insert-unsafe
+       db
+       :table-name 'messenger_chat
+       :values (alist-get 'chats data)
+       :conflict-action 'do-update
+       :conflict-attrs '(id))
+      (deterred-db-insert-unsafe
+       db
+       :table-name 'messenger_message
+       :values (alist-get 'messages data)
+       :conflict-action 'do-update
+       :conflict-attrs '(id)))))
 
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here

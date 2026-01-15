@@ -29,6 +29,7 @@
 (require 'cl-lib)
 (require 'org)
 (require 'uuidgen)
+(require 'magit-section)
 
 (require 'deterred-db)
 (require 'deterred-format)

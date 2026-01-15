@@ -185,6 +185,7 @@ DB, QUERY and VALUES are the same as `sqlite-execute'."
         ((integerp value) (number-to-string value))
         ((floatp value) (number-to-string value))
         ((stringp value) (deterred-db--escape value))
+        ((symbolp value) (deterred-db--escape (symbol-name value)))
         (t (error "Bad type for `deterred-db--format-value': %s"
                   value))))
 

@@ -63,35 +63,33 @@ Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Da
 #+end_src
 
 * Datasources
-| Name               | Status | Source            |
-|--------------------+--------+-------------------|
-| [[https://github.com/ActivityWatch/activitywatch][ActivityWatch]]      | +      | API               |
-| [[https://github.com/AntennaPod/AntennaPod][AntennaPod]]         | +      | Database (SQLite) |
-| [[https://orgmode.org/manual/Tracking-your-habits.html][org-habit]]          | +      | Org files         |
-| [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]]   | +      | Database          |
-| [[https://joinmastodon.org/][Mastodon]]           | +      | API               |
-| [[https://www.musicpd.org/][MPD]]                | +      | Daemon, CSV       |
-| [[https://telegram.org/][Telegram]]           | +      | JSON dump         |
-| [[https://wakatime.com/][WakaTime]]           | +      | JSON dump, API    |
-| [[https://www.digikam.org/][digiKam]]            | +      | Database (SQLite) |
-| [[https://readeck.org/en/][Readeck]]            | +      | API               |
-| [[https://wallabag.org/][Wallabag]]           | +      | API               |
-| [[https://reddit.com/][Reddit]]             | +      | CSV dump          |
-| hledger            |        | CLI               |
-| Claude Code        |        | [[https://github.com/ryoppippi/ccusage][ccusage]]           |
-| [[https://manifold.markets/][Manifold]]           |        | API               |
-| org-agenda         |        | Org files         |
-| org-roam           |        | Database + git    |
-| [[https://open-meteo.com/][Open Meteo]] ([[https://github.com/SqrtMinusOne/biome][BIOME]]) |        | API               |
-| GitHub             |        | API               |
-| GitLab             |        | API               |
-| Discord            |        | CSV dump          |
-| [[https://notmuchmail.org/][notmuch]]            |        | Database          |
-| Подорожник         |        |                   |
+| Name               | Status | Source                         |
+|--------------------+--------+--------------------------------|
+| [[https://github.com/ActivityWatch/activitywatch][ActivityWatch]]      | +      | API                            |
+| [[https://github.com/AntennaPod/AntennaPod][AntennaPod]]         | +      | Database (SQLite)              |
+| [[https://orgmode.org/manual/Tracking-your-habits.html][org-habit]]          | +      | Org files                      |
+| [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]]   | +      | Database                       |
+| [[https://joinmastodon.org/][Mastodon]]           | +      | API                            |
+| [[https://www.musicpd.org/][MPD]]                | +      | Daemon, CSV                    |
+| [[https://telegram.org/][Telegram]]           | +      | JSON dump, telega.el           |
+| [[https://wakatime.com/][WakaTime]]           | +      | JSON dump, API                 |
+| [[https://www.digikam.org/][digiKam]]            | +      | Database (SQLite)              |
+| [[https://readeck.org/en/][Readeck]]            | +      | API                            |
+| [[https://wallabag.org/][Wallabag]]           | +      | API                            |
+| [[https://reddit.com/][Reddit]]             | +      | CSV dump                       |
+| [[https://podorozhnik.spb.ru/][Подорожник]]         | +      |                                |
+| hledger            | +      | CLI                            |
+| Discord            | +      | dumps                          |
+| org-roam           | +      | Database + git                 |
+| Rocket.Chat        |        | API                            |
+| Claude Code        |        | [[https://github.com/ryoppippi/ccusage][ccusage]], jsonl, maybe a plugin |
+| [[https://manifold.markets/][Manifold]]           |        | API                            |
+| org-agenda         |        | Org files                      |
+| [[https://open-meteo.com/][Open Meteo]] ([[https://github.com/SqrtMinusOne/biome][BIOME]]) |        | API                            |
 
 * Plans
 Interfaces:
-- [ ] Generalize daily summary to range summary where possible (e.g. weekly summary)
+- [X] Generalize daily summary to range summary where possible (e.g. weekly summary)
 - [ ] Event list per day
 
 Edit UI for:
@@ -109,7 +107,7 @@ Meta:
 - [X] Extract faces?
 - [ ] Maybe not throw an error if there isn't a location.
 - [X] Auto-run backups on start
-- [ ] Sync
+- [X] Sync
 
 Dashboards:
 - [X] MPD
@@ -144,3 +142,9 @@ Messengers:
 
 WakaTime:
 - [X] Integrate with dired
+
+Claude Code:
+- Reference https://github.com/wakatime/claude-code-wakatime.git to make a plugin?
+
+Misc ideas:
+- Measure productivity with Claude Code and without

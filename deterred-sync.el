@@ -109,6 +109,7 @@
     ;; `deterred-mastodon'
     (replace :table-names (mastodon_post_mention mastodon_post mastodon_account))
     ;; `deterred-messengers'
+    ;; TODO this breaks merging users and chats.  Need another strategy
     (merge-keys :table-name messenger_user)
     (merge-keys :table-name messenger_chat)
     (merge-keys :table-name messenger_message)
