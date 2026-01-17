@@ -62,6 +62,22 @@ DB is the sqlite database object.
 Return a cons cell, with car as the start timestamp, and cdr as the
 end timestamp.")
 
+(cl-defgeneric deterred-source-range-detail (source &optional db)
+  "Get detailed data availability ranges for SOURCE.
+
+DB is the sqlite database object.
+
+Return a list of alists, each with keys:
+- `:name' - the name of the sub-range (e.g., \"telegram\", \"vk\")
+- `:start' - start timestamp
+- `:end' - end timestamp")
+
+(cl-defmethod deterred-source-range-detail ((_source deterred-source) &optional _db)
+  "Default implementation of `deterred-source-range-detail'.
+
+Returns nil."
+  nil)
+
 (cl-defgeneric deterred-source-sync (source &optional callback)
   "Sync SOURCE, if possible.
 

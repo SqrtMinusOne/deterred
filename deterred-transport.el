@@ -395,6 +395,24 @@ end timestamp."
                     FROM transport_trips")))
     (cons (caar data) (cadar data))))
 
+(cl-defmethod deterred-source-range-detail ((_source deterred-transport) &optional db)
+  "Get the data availability range for each transport source.
+
+DB is the sqlite database object.
+
+Return a list of alists with :name, :start, :end for each source."
+  (let* ((db (or db (deterred-db--init)))
+         (data (deterred-db-select-alist
+                db "SELECT source, MIN(timestamp) as start, MAX(timestamp) as end
+                    FROM transport_trips
+                    GROUP BY source
+                    ORDER BY source")))
+    (mapcar (lambda (row)
+              `((:name . ,(alist-get 'source row))
+                (:start . ,(alist-get 'start row))
+                (:end . ,(alist-get 'end row))))
+            data)))
+
 (cl-defmethod deterred-source-actions ((_source deterred-transport) &optional callback)
   "Run an action for the transport source.
 

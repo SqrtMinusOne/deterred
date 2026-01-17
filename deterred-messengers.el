@@ -597,6 +597,24 @@ end timestamp."
                     FROM messenger_message")))
     (cons (caar data) (cadar data))))
 
+(cl-defmethod deterred-source-range-detail ((_source deterred-messengers) &optional db)
+  "Get the data availability range for each messenger.
+
+DB is the sqlite database object.
+
+Return a list of alists with :name, :start, :end for each messenger."
+  (let* ((db (or db (deterred-db--init)))
+         (data (deterred-db-select-alist
+                db "SELECT messenger, MIN(timestamp) as start, MAX(timestamp) as end
+                    FROM messenger_message
+                    GROUP BY messenger
+                    ORDER BY messenger")))
+    (mapcar (lambda (row)
+              `((:name . ,(alist-get 'messenger row))
+                (:start . ,(alist-get 'start row))
+                (:end . ,(alist-get 'end row))))
+            data)))
+
 (cl-defmethod deterred-source-actions ((_source deterred-messengers) &optional callback)
   "Run an action for the messengers source.
 
@@ -604,7 +622,8 @@ Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load Telegram JSON" deterred-messengers-load-telegram-json nil)
      ("Load VK HTML" deterred-messengers-load-vk-html nil)
-     ("Load Telega" deterred-messengers-load-telega nil))
+     ("Load Telega" deterred-messengers-load-telega nil)
+     ("Load Discord" deterred-messengers-load-discord))
    callback))
 
 (cl-defmethod deterred-source-range-summary
@@ -1264,7 +1283,7 @@ ready to be inserted into the database."
       (chats . ,chat-data)
       (messages . ,(apply #'append messages-data)))))
 
-(defun deterred-messenger-load-discord-directory (directory)
+(defun deterred-messengers-load-discord (directory)
   "Load Discord export DIRECTORY into DETERRED.
 
 The directory has to have an index.json file, mapping chat ids to

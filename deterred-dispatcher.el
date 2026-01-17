@@ -110,9 +110,88 @@ No idea what I'm doing wrong, but this seems to help."
     map)
   "A keymap for `deterred-dispatcher-mode'.")
 
+(defvar deterred-dispatcher--mode nil
+  "Either nil, day-summary or range-summary.")
+
 (define-derived-mode deterred-dispatcher-mode magit-section "DETERRED"
   :group 'deterred
   (setq-local buffer-read-only t))
+
+(defun deterred-dispatcher--render-source-line (source max-name-length)
+  "Render main line for SOURCE with MAX-NAME-LENGTH padding."
+  (let* ((range (deterred-source-range source))
+         (can-sync (deterred-source-sync-p source))
+         (can-action (deterred-source-actions-p source))
+         (warn-days (oref source warn-days))
+         (unsynced-days (floor
+                         (/ (float (- (time-convert nil 'integer)
+                                      (or (cdr range) 0)))
+                            (* 60 60 24)))))
+    (insert
+     (format "%s  %s - %s"
+             (propertize
+              (string-pad (oref source name) max-name-length)
+              'face 'deterred-faces-source-name)
+             (if (car range)
+                 (propertize
+                  (format-time-string deterred-dispatcher-short-date-format
+                                      (car range))
+                  'face 'deterred-faces-date)
+               (propertize "(empty)   " 'face 'deterred-faces-info))
+             (if (cdr range)
+                 (propertize
+                  (format-time-string deterred-dispatcher-short-date-format
+                                      (cdr range))
+                  'face (if (or (null warn-days)
+                                (> warn-days unsynced-days))
+                            'deterred-faces-date
+                          'warning))
+               (propertize "(empty)   " 'face 'deterred-faces-info))))
+    (when can-sync
+      (insert " ")
+      (widget-create 'push-button
+                     :notify (lambda (&rest _)
+                               (deterred-source-sync
+                                source
+                                (lambda ()
+                                  (message "Sync done: %s"
+                                           (oref source name))
+                                  (deterred-dispatcher-refresh))))
+                     "[Sync]"))
+    (when can-action
+      (insert " ")
+      (widget-create 'push-button
+                     :notify (lambda (&rest _)
+                               (deterred-source-actions
+                                source
+                                (lambda ()
+                                  (message "Action done: %s"
+                                           (oref source name))
+                                  (deterred-dispatcher-refresh))))
+                     "[Actions...]"))))
+
+(defun deterred-dispatcher--render-range-detail (range-detail max-name-length)
+  "Render RANGE-DETAIL list as indented lines.
+
+MAX-NAME-LENGTH is used to pad the names for alignment."
+  (dolist (detail range-detail)
+    (insert
+     (format "  %s  %s - %s\n"
+             (propertize
+              (string-pad (alist-get :name detail) (- max-name-length 2))
+              'face 'deterred-faces-info)
+             (if (alist-get :start detail)
+                 (propertize
+                  (format-time-string deterred-dispatcher-short-date-format
+                                      (alist-get :start detail))
+                  'face 'deterred-faces-date)
+               (propertize "(empty)   " 'face 'deterred-faces-info))
+             (if (alist-get :end detail)
+                 (propertize
+                  (format-time-string deterred-dispatcher-short-date-format
+                                      (alist-get :end detail))
+                  'face 'deterred-faces-date)
+               (propertize "(empty)   " 'face 'deterred-faces-info))))))
 
 (defun deterred-dispatcher--render-sources ()
   "Render `deterred-sources' for `deterred-dispatcher'."
@@ -127,57 +206,14 @@ No idea what I'm doing wrong, but this seems to help."
                              deterred-sources)
                      '(0)))))
       (dolist (source deterred-sources)
-        (let* ((range (deterred-source-range source))
-               (can-sync (deterred-source-sync-p source))
-               (can-action (deterred-source-actions-p source))
-               (warn-days (oref source warn-days))
-               (unsynced-days (floor
-                               (/ (float (- (time-convert nil 'integer)
-                                            (or (cdr range) 0)))
-                                  (* 60 60 24)))))
-          (insert
-           (format "%s  %s - %s"
-                   (propertize
-                    (string-pad (oref source name) max-name-length)
-                    'face 'deterred-faces-source-name)
-                   (if (car range)
-                       (propertize
-                        (format-time-string deterred-dispatcher-short-date-format
-                                            (car range))
-                        'face 'deterred-faces-date)
-                     (propertize "(empty)   " 'face 'deterred-faces-info))
-                   (if (cdr range)
-                       (propertize
-                        (format-time-string deterred-dispatcher-short-date-format
-                                            (cdr range))
-                        'face (if (or (null warn-days)
-                                      (> warn-days unsynced-days))
-                                  'deterred-faces-date
-                                'warning))
-                     (propertize "(empty)   " 'face 'deterred-faces-info))))
-          (when can-sync
-            (insert " ")
-            (widget-create 'push-button
-                           :notify (lambda (&rest _)
-                                     (deterred-source-sync
-                                      source
-                                      (lambda ()
-                                        (message "Sync done: %s"
-                                                 (oref source name))
-                                        (deterred-dispatcher-refresh))))
-                           "[Sync]"))
-          (when can-action
-            (insert " ")
-            (widget-create 'push-button
-                           :notify (lambda (&rest _)
-                                     (deterred-source-actions
-                                      source
-                                      (lambda ()
-                                        (message "Action done: %s"
-                                                 (oref source name))
-                                        (deterred-dispatcher-refresh))))
-                           "[Actions...]"))
-          (insert "\n"))))))
+        (let ((range-detail (deterred-source-range-detail source)))
+          (if range-detail
+              (magit-insert-section (deterred-source-detail source t)
+                (deterred-dispatcher--render-source-line source max-name-length)
+                (magit-insert-heading)
+                (deterred-dispatcher--render-range-detail range-detail max-name-length))
+            (deterred-dispatcher--render-source-line source max-name-length)
+            (insert "\n")))))))
 
 (defun deterred-dispatcher--render-sync-state ()
   "Render sync state section for `deterred-dispatcher'."
@@ -460,6 +496,7 @@ START-TIMESTAMP and END-TIMESTAMP are UNIX timestamps."
           (erase-buffer)
           (setq-local widget-push-button-prefix "")
           (setq-local widget-push-button-suffix "")
+          (setq-local deterred-dispatcher--mode 'range-summary)
           (unless (derived-mode-p #'deterred-dispatcher-mode)
             (deterred-dispatcher-mode))
           (magit-insert-section (deterred-info)
