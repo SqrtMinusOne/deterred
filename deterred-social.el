@@ -31,11 +31,20 @@
 (require 'iso8601)
 (require 'request)
 (require 'uuidgen)
+(require 'dom)
 
 (require 'deterred-db)
 (require 'deterred-utils)
 (require 'deterred-format)
 (require 'deterred-source)
+
+(defcustom deterred-social-vk-timezone-offset -10800
+  "Timezone offset in seconds to convert VK timestamps to UTC.
+
+VK exports times in MSK (UTC+3), so the default is -10800 seconds (-3 hours)
+to convert to UTC."
+  :type 'integer
+  :group 'deterred)
 
 ;;; Mastodon
 
@@ -219,10 +228,232 @@ Call CALLBACK when done."
         (deterred-db-mark-updated-batch
          db '(reddit_post reddit_comment))))))
 
+;;; VK Wall
+
+(defconst deterred-social-vk-uuid-namespace
+  "a7b8c9d0-1234-5678-9abc-def012345678"
+  "UUID namespace for VK wall posts.")
+
+(defun deterred-social-vk--parse-wall-date (date-str)
+  "Parse VK wall DATE-STR and return timestamp.
+
+Expected format: '2 Feb 2021 at 7:08 pm'.
+Applies `deterred-social-vk-timezone-offset' to convert to UTC."
+  (when (string-match (rx (group (+ digit)) " "
+                          (group (+ alpha)) " "
+                          (group (+ digit)) " at "
+                          (group (+ digit)) ":"
+                          (group (+ digit)) " "
+                          (group (| "am" "pm")))
+                      date-str)
+    (let* ((day (string-to-number (match-string 1 date-str)))
+           (month-str (match-string 2 date-str))
+           (year (string-to-number (match-string 3 date-str)))
+           (hour (string-to-number (match-string 4 date-str)))
+           (minute (string-to-number (match-string 5 date-str)))
+           (ampm (match-string 6 date-str))
+           ;; Convert 12-hour to 24-hour format
+           (hour-24 (cond
+                     ((and (equal ampm "am") (= hour 12)) 0)
+                     ((and (equal ampm "pm") (/= hour 12)) (+ hour 12))
+                     (t hour))))
+      (+ (floor (float-time
+                 (date-to-time
+                  (format "%d %s %d %02d:%02d:00"
+                          day month-str year hour-24 minute))))
+         deterred-social-vk-timezone-offset))))
+
+(defun deterred-social-vk--parse-wall-file (file-path)
+  "Parse VK wall HTML FILE-PATH.
+
+Returns a list of post alists with keys: id, timestamp, body, link.
+Only returns posts made by \"You\"."
+  (let ((dom (with-temp-buffer
+               (insert-file-contents file-path)
+               (libxml-parse-html-region (point-min) (point-max))))
+        posts)
+    (when-let* ((body (dom-by-tag dom 'body))
+                (items (dom-by-class body (rx bos "item" eos))))
+      (dolist (item (if (listp (car items)) items (list items)))
+        ;; Get metadata from item__tertiary
+        (when-let* ((tertiary-list (dom-by-class item "item__tertiary"))
+                    (tertiary (car tertiary-list))
+                    (span (car (dom-by-tag tertiary 'span)))
+                    (span-text (string-trim (dom-texts span))))
+          ;; Check if the post is by "You" (starts with "You ")
+          (when (string-prefix-p "You " span-text)
+            ;; Extract date part after "You "
+            (let ((date-str (substring span-text 4)))
+              (when-let ((timestamp (deterred-social-vk--parse-wall-date date-str)))
+                ;; Get post link for unique ID
+                (let* ((post-link-el (car (dom-by-class item "post__link")))
+                       (post-url (when post-link-el (dom-attr post-link-el 'href)))
+                       (id (if post-url
+                               (uuidgen-3 deterred-social-vk-uuid-namespace post-url)
+                             (uuidgen-3 deterred-social-vk-uuid-namespace
+                                        (format "wall-%d" timestamp))))
+                       ;; Get first item__main for content
+                       (item-main-list (dom-by-class item "item__main"))
+                       (first-main (car item-main-list))
+                       ;; Get the first child div for body text (not the kludges)
+                       (content-div (car (dom-children first-main)))
+                       (body-text ""))
+                  ;; Extract text, excluding attachment descriptions
+                  (when (and content-div (listp content-div))
+                    (let ((text-parts nil))
+                      (dolist (child (dom-children content-div))
+                        (when (stringp child)
+                          (push (string-trim child) text-parts)))
+                      (setq body-text (string-join (nreverse text-parts) " "))))
+                  ;; Get first attachment link
+                  (let* ((attachment-link-el (car (dom-by-class item "attachment__link")))
+                         (link (when attachment-link-el
+                                 (dom-attr attachment-link-el 'href))))
+                    (push `((id . ,id)
+                            (timestamp . ,timestamp)
+                            (body . ,body-text)
+                            (link . ,link))
+                          posts)))))))))
+    (nreverse posts)))
+
+(defun deterred-social-vk-load-wall (directory)
+  "Load VK wall posts from DIRECTORY into DETERRED.
+
+DIRECTORY should contain wall0.html, wall1.html, etc."
+  (interactive "DVK wall directory: ")
+  (let* ((wall-files (directory-files directory t
+                                      (rx bos "wall" (+ digit) ".html" eos)))
+         (db (deterred-db--init))
+         all-posts)
+    (unless wall-files
+      (user-error "No wall*.html files found in %s" directory))
+    (dolist (file wall-files)
+      (message "Parsing %s..." (file-name-nondirectory file))
+      (setq all-posts (append all-posts (deterred-social-vk--parse-wall-file file))))
+    (message "Found %d posts by You" (length all-posts))
+    (when all-posts
+      (with-sqlite-transaction db
+        (deterred-db-insert-unsafe
+         db :table-name 'vk_post
+         :values all-posts
+         :conflict-action 'do-update
+         :conflict-attrs '(id))
+        (deterred-db-mark-updated-batch db '(vk_post))))
+    (message "Loaded %d VK wall posts" (length all-posts))))
+
+;;; Twitter (Internet Archive)
+
+(defconst deterred-social-twitter-uuid-namespace
+  "b8c9d0e1-2345-6789-abcd-ef0123456789"
+  "UUID namespace for Twitter posts.")
+
+(defun deterred-social-twitter--find-by-attr (dom attr-name attr-value)
+  "Find all elements in DOM with ATTR-NAME equal to ATTR-VALUE."
+  (let ((results nil))
+    (when (and (listp dom) (listp (car dom)))
+      ;; It's a list of elements
+      (dolist (child dom)
+        (setq results (append results
+                              (deterred-social-twitter--find-by-attr
+                               child attr-name attr-value)))))
+    (when (and (listp dom) (symbolp (car dom)))
+      ;; It's an element
+      (when (equal (dom-attr dom attr-name) attr-value)
+        (push dom results))
+      ;; Recurse into children
+      (dolist (child (dom-children dom))
+        (when (listp child)
+          (setq results (append results
+                                (deterred-social-twitter--find-by-attr
+                                 child attr-name attr-value))))))
+    results))
+
+(defun deterred-social-twitter--parse-file (file-path)
+  "Parse Twitter Internet Archive HTML FILE-PATH.
+
+Returns a list of post alists with keys: id, twitter_id, timestamp, body.
+Only returns posts by SqrtMinusTwo.
+
+NOTE: This parser is specifically designed to parse an HTML file saved
+from the Internet Archive (Wayback Machine) snapshot of @SqrtMinusTwo's
+Twitter profile from early 2023.  It uses schema.org microdata embedded
+in the HTML to extract tweet information."
+  (let ((dom (with-temp-buffer
+               (insert-file-contents file-path)
+               (libxml-parse-html-region (point-min) (point-max))))
+        posts)
+    ;; Find all SocialMediaPosting divs with itemprop="hasPart"
+    ;; These are the top-level tweet containers
+    (let ((postings (deterred-social-twitter--find-by-attr
+                     dom 'itemtype "https://schema.org/SocialMediaPosting")))
+      ;; Filter to only hasPart (top-level tweets, not citations/quotes)
+      (dolist (posting postings)
+        (when (equal (dom-attr posting 'itemprop) "hasPart")
+          ;; Find metadata within this posting
+          (let* ((id-meta (car (deterred-social-twitter--find-by-attr
+                                posting 'itemprop "identifier")))
+                 (date-meta (car (deterred-social-twitter--find-by-attr
+                                  posting 'itemprop "datePublished")))
+                 (author-meta (car (deterred-social-twitter--find-by-attr
+                                    posting 'itemprop "additionalName")))
+                 (tweet-id (when id-meta (dom-attr id-meta 'content)))
+                 (date-str (when date-meta (dom-attr date-meta 'content)))
+                 (author (when author-meta (dom-attr author-meta 'content))))
+            ;; Only include tweets by SqrtMinusTwo that are not retweets
+            (when (and tweet-id date-str (equal author "SqrtMinusTwo"))
+              ;; Check for retweet indicator (socialContext with "Retweeted")
+              (let* ((social-context (car (deterred-social-twitter--find-by-attr
+                                           posting 'data-testid "socialContext")))
+                     (is-retweet (and social-context
+                                      (string-match-p
+                                       (rx (| "Retweeted" "retweeted"))
+                                       (dom-texts social-context)))))
+                ;; Skip retweets
+                (unless is-retweet
+                  ;; Find tweet text
+                  (let* ((text-elem (car (deterred-social-twitter--find-by-attr
+                                          posting 'data-testid "tweetText")))
+                         (body (if text-elem
+                                   (string-trim (dom-texts text-elem))
+                                 "")))
+                    (push `((id . ,(uuidgen-3
+                                    deterred-social-twitter-uuid-namespace
+                                    tweet-id))
+                            (twitter_id . ,tweet-id)
+                            (timestamp . ,(floor
+                                           (float-time
+                                            (encode-time
+                                             (iso8601-parse date-str)))))
+                            (body . ,body))
+                          posts))))))))
+      (nreverse posts))))
+
+(defun deterred-social-twitter-load-archive (file)
+  "Load Twitter posts from Internet Archive HTML FILE into DETERRED.
+
+NOTE: This parser is specifically designed to parse an HTML file saved
+from the Internet Archive (Wayback Machine) snapshot of @SqrtMinusTwo's
+Twitter profile from early 2023.  It will very likely not work
+anything before or after due what happened to Twitter, so I haven't
+made this general."
+  (interactive "fTwitter archive HTML file: ")
+  (let* ((posts (deterred-social-twitter--parse-file file))
+         (db (deterred-db--init)))
+    (message "Found %d tweets by SqrtMinusTwo" (length posts))
+    (when posts
+      (with-sqlite-transaction db
+        (deterred-db-insert-unsafe
+         db :table-name 'twitter_post
+         :values posts
+         :conflict-action 'do-update
+         :conflict-attrs '(id))
+        (deterred-db-mark-updated-batch db '(twitter_post))))
+    (message "Loaded %d Twitter posts" (length posts))))
+
 ;;; Rendering
 
 (defun deterred-social--render-post (post)
-  "Render a single social media POST (Reddit or Mastodon)."
+  "Render a single social media POST (Reddit, Mastodon, VK or Twitter)."
   (let ((source (alist-get 'source post)))
     (magit-insert-section (deterred-social-post post t)
       (insert
@@ -242,7 +473,15 @@ Call CALLBACK when done."
                (if-let (title (alist-get 'title post))
                    (f "\"" title "\"")
                  "comment")
-               " on r/" (alist-get 'subreddit post)))))
+               " on r/" (alist-get 'subreddit post))))
+          ('vk
+           (format "%s on VK"
+                   (format-time-string deterred-dispatcher-date-time-format
+                                       (alist-get 'timestamp post))))
+          ('twitter
+           (format "%s on Twitter"
+                   (format-time-string deterred-dispatcher-date-time-format
+                                       (alist-get 'timestamp post)))))
         'face 'deterred-faces-section-heading-4))
       (magit-insert-heading)
       (pcase source
@@ -263,16 +502,38 @@ Call CALLBACK when done."
             (deterred-format
              (f-button "[Open]" (lambda (&rest _)
                                   (browse-url (alist-get 'url post)))))
-            "\n\n")))))))
+            "\n\n")))
+        ('vk
+         (when-let ((body (alist-get 'body post)))
+           (unless (string-empty-p body)
+             (insert body "\n")))
+         (when-let ((link (alist-get 'link post)))
+           (insert
+            (deterred-format
+             (f link " "
+                (f-button "[Open]" (lambda (&rest _) (browse-url link)))))
+            "\n"))
+         (insert "\n"))
+        ('twitter
+         (when-let ((body (alist-get 'body post)))
+           (unless (string-empty-p body)
+             (insert body "\n")))
+         (insert "\n"))))))
 
-(defun deterred-social--render-data (mastodon-posts reddit-posts reddit-comments)
-  "Render MASTODON-POSTS, REDDIT-POSTS and REDDIT-COMMENTS sorted by timestamp."
+(defun deterred-social--render-data (mastodon-posts reddit-posts reddit-comments
+                                                    vk-posts twitter-posts)
+  "Render all posts sorted by timestamp.
+
+MASTODON-POSTS, REDDIT-POSTS, REDDIT-COMMENTS, VK-POSTS and
+TWITTER-POSTS are lists of alists."
   (let ((all-posts
          (sort
           (append
            (mapcar (lambda (p) (cons '(source . mastodon) p)) mastodon-posts)
            (mapcar (lambda (p) (cons '(source . reddit) p)) reddit-posts)
-           (mapcar (lambda (p) (cons '(source . reddit) p)) reddit-comments))
+           (mapcar (lambda (p) (cons '(source . reddit) p)) reddit-comments)
+           (mapcar (lambda (p) (cons '(source . vk) p)) vk-posts)
+           (mapcar (lambda (p) (cons '(source . twitter) p)) twitter-posts))
           (lambda (a b)
             (< (alist-get 'timestamp a) (alist-get 'timestamp b))))))
     (dolist (post all-posts)
@@ -282,7 +543,7 @@ Call CALLBACK when done."
 
 ;;;###autoload
 (defclass deterred-social (deterred-source)
-  ((name :initform "Social")
+  ((name :initform "Social Media")
    (mastodon-server :initarg :mastodon-server :initform nil)
    (mastodon-account-id :initarg :mastodon-account-id :initform nil))
   "DETERRED source for social media (Reddit and Mastodon).")
@@ -302,6 +563,12 @@ end timestamp."
                       UNION ALL
                       SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts
                       FROM mastodon_post
+                      UNION ALL
+                      SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts
+                      FROM vk_post
+                      UNION ALL
+                      SELECT MIN(timestamp) as min_ts, MAX(timestamp) as max_ts
+                      FROM twitter_post
                     )")))
     (cons (caar data) (cadar data))))
 
@@ -318,7 +585,23 @@ Return a list of alists with :name, :start, :end for each platform."
          (mastodon-range (car (sqlite-select
                                db "SELECT MIN(timestamp), MAX(timestamp)
                                    FROM mastodon_post")))
+         (vk-range (car (sqlite-select
+                         db "SELECT MIN(timestamp), MAX(timestamp)
+                             FROM vk_post")))
+         (twitter-range (car (sqlite-select
+                              db "SELECT MIN(timestamp), MAX(timestamp)
+                                  FROM twitter_post")))
          (result nil))
+    (when (car twitter-range)
+      (push `((:name . "twitter")
+              (:start . ,(car twitter-range))
+              (:end . ,(cadr twitter-range)))
+            result))
+    (when (car vk-range)
+      (push `((:name . "vk")
+              (:start . ,(car vk-range))
+              (:end . ,(cadr vk-range)))
+            result))
     (when (car mastodon-range)
       (push `((:name . "mastodon")
               (:start . ,(car mastodon-range))
@@ -357,7 +640,9 @@ SOURCE is an instance of `deterred-social'."
 
 Run CALLBACK when done."
   (deterred-source--actions-pick
-   '(("Load Reddit dump folder" deterred-social-reddit-load-dump nil))
+   '(("Load Reddit dump folder" deterred-social-reddit-load-dump nil)
+     ("Load VK wall posts" deterred-social-vk-load-wall nil)
+     ("Load Twitter archive" deterred-social-twitter-load-archive nil))
    callback))
 
 (cl-defmethod deterred-source-range-summary
@@ -389,10 +674,24 @@ DB is the sqlite database object."
                           (list start end)))
          (mastodon-unique-servers
           (seq-uniq (mapcar (lambda (post) (alist-get 'server post)) mastodon-posts)))
+         ;; VK data
+         (vk-posts (deterred-db-select-alist
+                    db "SELECT * FROM vk_post
+                        WHERE timestamp BETWEEN ? AND ?
+                        ORDER BY timestamp ASC"
+                    (list start end)))
+         ;; Twitter data
+         (twitter-posts (deterred-db-select-alist
+                         db "SELECT * FROM twitter_post
+                             WHERE timestamp BETWEEN ? AND ?
+                             ORDER BY timestamp ASC"
+                         (list start end)))
          ;; Build descriptions
          (has-reddit (or reddit-posts reddit-comments))
-         (has-mastodon mastodon-posts))
-    (when (or has-reddit has-mastodon)
+         (has-mastodon mastodon-posts)
+         (has-vk vk-posts)
+         (has-twitter twitter-posts))
+    (when (or has-reddit has-mastodon has-vk has-twitter)
       `((:short-description
          . ,(deterred-format
              ;; Reddit description
@@ -410,14 +709,23 @@ DB is the sqlite database object."
              (when (and has-reddit has-mastodon) "; ")
              ;; Mastodon description
              (when has-mastodon
-               (f
-                (f (f-num (seq-length mastodon-posts)) " mastodon posts"
-                   (when (= (seq-length mastodon-unique-servers) 1)
-                     (f " on " (car mastodon-unique-servers))))))))
+               (f (f-num (seq-length mastodon-posts)) " mastodon posts"
+                  (when (= (seq-length mastodon-unique-servers) 1)
+                    (f " on " (car mastodon-unique-servers)))))
+             ;; Separator
+             (when (and (or has-reddit has-mastodon) has-vk) "; ")
+             ;; VK description
+             (when has-vk
+               (f (f-num (seq-length vk-posts)) " vk posts"))
+             ;; Separator
+             (when (and (or has-reddit has-mastodon has-vk) has-twitter) "; ")
+             ;; Twitter description
+             (when has-twitter
+               (f (f-num (seq-length twitter-posts)) " twitter posts"))))
         (:long-description-fn
          . ,(lambda (&rest _)
               (deterred-social--render-data
-               mastodon-posts reddit-posts reddit-comments)))))))
+               mastodon-posts reddit-posts reddit-comments vk-posts twitter-posts)))))))
 
 (provide 'deterred-social)
 ;;; deterred-social.el ends here
