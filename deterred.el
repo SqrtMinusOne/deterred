@@ -46,14 +46,13 @@
 (require 'deterred-activitywatch)
 (require 'deterred-digikam)
 (require 'deterred-habits)
-(require 'deterred-mastodon)
 (require 'deterred-messengers)
 (require 'deterred-mpd)
 (require 'deterred-org)
 (require 'deterred-org-journal-tags)
 (require 'deterred-podcasts)
 (require 'deterred-read-it-later)
-(require 'deterred-reddit)
+(require 'deterred-social)
 (require 'deterred-wakatime)
 
 ;; Integrations
