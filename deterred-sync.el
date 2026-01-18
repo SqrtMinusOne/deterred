@@ -106,8 +106,9 @@
     ;; (with replace) or to break deleting them (with merge-keys).  I
     ;; choose the former.
     (replace :table-names (location_times))
-    ;; `deterred-mastodon'
+    ;; `deterred-social'
     (replace :table-names (mastodon_post_mention mastodon_post mastodon_account))
+    (replace :table-names (reddit_comment reddit_post vk_post twitter_post))
     ;; `deterred-messengers'
     ;; TODO this breaks merging users and chats.  Need another strategy
     (merge-keys :table-name messenger_user)
@@ -116,14 +117,16 @@
     ;; `deterred-mpd'
     (merge-keys :table-name mpd_song)
     (merge-keys :table-name mpd_song_listened :key-attrs (mpd_song_id timestamp))
+    ;; `deterred-org-roam'
+    (replace :table-names (org_roam_node_tag org_roam_node_modification org_roam_node))
     ;; `deterred-org-journal-tags'
     (replace :table-names (org_journal_record_tag org_journal_tag org_journal_record))
     ;; `deterred-podcasts'
     (replace :table-names (podcasts_listened podcasts_feed))
     ;; `deterred-read-it-later'
     (replace :table-names (read_it_later_article read_it_later_host))
-    ;; `deterred-reddit'
-    (replace :table-names (reddit_comment reddit_post))
+    ;; `deterred-transport'
+    (merge-keys :table-names (transport_trips))
     ;; `deterred-wakatime'
     (replace :table-names (
                            wakatime_branches wakatime_categories wakatime_editors
@@ -297,6 +300,12 @@ buffer without executing them."
       (insert (format "Syncing %s to current database%s\n\n"
                       hostname (if dry-run " (DRY RUN)" ""))))
     (sqlite-execute db (format "ATTACH DATABASE '%s' AS other_db" db-other-path))
+    (let ((current-migrations (caar (sqlite-select db "SELECT COUNT(*) FROM main.meta_db_migrations")))
+          (other-migrations (caar (sqlite-select db "SELECT COUNT(*) FROM other_db.meta_db_migrations"))))
+      (unless (= current-migrations other-migrations)
+        (sqlite-execute db "DETACH DATABASE other_db")
+        (user-error "Schema mismatch: current DB has %d migrations, %s has %d"
+                    current-migrations hostname other-migrations)))
     (unwind-protect
         (with-sqlite-transaction db
           (dolist (strategy-config deterred-sync-config)
@@ -335,7 +344,9 @@ buffer without executing them."
 TABLE-NAMES is a list of table names to process.  If at least one
 table in TABLE-NAMES has more rows in other_db, all tables are
 replaced.  If DRY-RUN is non-nil, only print the actions to
-LOG-BUFFER without executing them."
+LOG-BUFFER without executing them.
+
+HOSTNAME is unused."
   (let (should-replace)
     (dolist (table-name table-names)
       (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
@@ -374,10 +385,10 @@ LOG-BUFFER without executing them."
   "Merge records from other_db to DB by hostname and timestamp.
 
 Only syncs missing records from HOSTNAME (ones later than or equal to
-the latest timestamp for that HOSTNAME in DB).  HOSTNAME-ATTR is the
-name of the hostname column, TIMESTAMP-ATTR is the name of the
-timestamp column.  If DRY-RUN is non-nil, only print the actions to
-LOG-BUFFER without executing them."
+the latest timestamp for that HOSTNAME in DB).  TABLE-NAME is the
+table name to sync.  HOSTNAME-ATTR is the name of the hostname column,
+TIMESTAMP-ATTR is the name of the timestamp column.  If DRY-RUN is
+non-nil, only print the actions to LOG-BUFFER without executing them."
   (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
          (hostname-str (if (symbolp hostname-attr) (symbol-name hostname-attr) hostname-attr))
          (timestamp-str (if (symbolp timestamp-attr) (symbol-name timestamp-attr) timestamp-attr))
@@ -422,10 +433,16 @@ LOG-BUFFER without executing them."
 (cl-defun deterred-sync--merge-keys (db &key table-name hostname (key-attrs '(id)) dry-run log-buffer)
   "Merge records from other_db to DB by key attributes.
 
+TABLE-NAME is the target table name.
+
 For each row in other_db, insert it into DB.  On conflict with
 existing keys, update NULL values in DB with non-NULL values from
-other_db.  KEY-ATTRS specifies the key columns.  If DRY-RUN is
-non-nil, only print the actions to LOG-BUFFER without executing them."
+other_db.  KEY-ATTRS specifies the key columns.
+
+If DRY-RUN is non-nil, only print the actions to LOG-BUFFER without
+executing them.
+
+HOSTNAME is unused."
   (let* ((table-str (if (symbolp table-name) (symbol-name table-name) table-name))
          (count (caar (sqlite-select db (format "SELECT COUNT(*) FROM other_db.%s" table-str)))))
     (when log-buffer
@@ -450,6 +467,39 @@ non-nil, only print the actions to LOG-BUFFER without executing them."
                             table-str attrs-str attrs-str table-str key-attrs-str update-clauses)))
         (sqlite-execute db query))
       (deterred-db-mark-updated db table-name))))
+
+(cl-defun deterred-sync--merge-with-extra-keys
+    (db &key table-name hostname (key-attr 'id) extra-keys update-tables-map
+        dry-run log-buffer)
+  "Merge records by KEY-ATTR accounting for merged rows by EXTRA-KEYS.
+
+EXTRA-KEYS is a list of additional key attributes in table.
+UPDATE-TABLES-MAP is an alist with tables linked to TABLE-NAME, where
+car is the linked table nake, and cdr is the foreign key to
+TABLE-NAME.KEY-ATTR.
+
+The works as follows:
+- Find all records by KEY-ATTR, present in main but not in other_db
+  and vice versa.
+- For each extra record in main, look for a record in other_db with
+  the same value of extra_key.  If found, this is the merged record.
+  Then:
+  - Set the value of extra_key in main to the value of extra_key in
+    other_db.
+  - Update all linked tables in UPDATE-TABLES-MAP accordingly.
+  - Delete the extra record in main.
+- For each extra record in other_db, look for a record in main with
+  the same value of extra_key.  If found, ignore this extra record
+  because it was merged.  Otherwise, insert the record in main.
+- For each record in other_db that was not merged, update NULL values
+  unset in it main but set in other_db, like
+  `deterred-sync--merge-keys'.
+
+If DRY-RUN is non-nil, only print the actions to LOG-BUFFER without
+executing them.  DB is the SQLite connection object.
+
+HOSTNAME is unused."
+  (error "TODO implement"))
 
 (defun deterred-sync-config-sanity-check ()
   "Sanity check for DETERRED sync.
