@@ -196,11 +196,12 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
           (directory-files
            backups-dir t
            (rx (literal file-name) "."))))
-    (seq-max (mapcar (lambda (f)
-                       (time-convert
-                        (nth 5 (file-attributes f))
-                        'integer))
-                     source-files))))
+    (when source-files
+      (seq-max (mapcar (lambda (f)
+                         (time-convert
+                          (nth 5 (file-attributes f))
+                          'integer))
+                       source-files)))))
 
 (defun deterred-backups-last ()
   "Get the last backup time of the DETERRED database."
@@ -212,7 +213,9 @@ Where <kind> is the same as the keys of KEEP-PARAMS."
   "Return t if a fresh backup is required."
   (let ((start-of-day (deterred-utils-ts-to-day-start))
         (backups-last (deterred-backups-last)))
-    (< backups-last start-of-day)))
+    (if backups-last
+        (< backups-last start-of-day)
+      t)))
 
 (provide 'deterred-backup)
 ;;; deterred-backup.el ends here
