@@ -78,6 +78,7 @@ Return a cons cell with `car' set to the number of deleted files, and
             (lambda (stamp)
               (concat
                (file-name-as-directory backups-dir) file-name
+               "." (system-name)
                "." (symbol-name kind) "." stamp))
             stamps)))
          (senior-file (car target-files))
@@ -162,7 +163,7 @@ The values are the number of days/weeks/months for which to keep the
 respective backups.
 
 The resulting filenames are formed as follows:
-<backups-dir>/<filename>.<kind>.<stamp>
+<backups-dir>/<filename>.<hostname>.<kind>.<stamp>
 Where <kind> is the same as the keys of KEEP-PARAMS."
   (unless (file-exists-p file)
     (error "File to backup %s doesn't exist" file))
