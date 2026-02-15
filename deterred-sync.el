@@ -82,6 +82,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-utils)
 
 (defcustom deterred-sync-location "~/.deterred/sync/"
   "The path to where sync DB snapshots are stored.  Change this."
@@ -110,10 +111,11 @@
     (replace :table-names (mastodon_post_mention mastodon_post mastodon_account))
     (replace :table-names (reddit_comment reddit_post vk_post twitter_post))
     ;; `deterred-messengers'
-    ;; TODO this breaks merging users and chats.  Need another strategy
-    (merge-keys :table-name messenger_user)
-    (merge-keys :table-name messenger_chat)
-    (merge-keys :table-name messenger_message)
+    ;; (merge-with-extra-keys :table-name messenger_user
+    ;;                        :extra-keys (telegram_id vk_id discord_id)
+    ;;                        :update-tables-map ((messenger_chat . target_user_id)
+    ;;                                            (messenger_message . sender_id)))
+    (replace :table-names (messenger_user messenger_chat messenger_message))
     ;; `deterred-mpd'
     (merge-keys :table-name mpd_song)
     (merge-keys :table-name mpd_song_listened :key-attrs (mpd_song_id timestamp))
@@ -126,7 +128,7 @@
     ;; `deterred-read-it-later'
     (replace :table-names (read_it_later_article read_it_later_host))
     ;; `deterred-transport'
-    (merge-keys :table-names (transport_trips))
+    (merge-keys :table-name transport_trips)
     ;; `deterred-wakatime'
     (replace :table-names (
                            wakatime_branches wakatime_categories wakatime_editors
@@ -146,7 +148,8 @@ See the comments in the `deterred-sync' package for more detail.")
 (defconst deterred-sync-strategies
   '((merge-hostname . deterred-sync--merge-hostname)
     (replace . deterred-sync--replace)
-    (merge-keys . deterred-sync--merge-keys))
+    (merge-keys . deterred-sync--merge-keys)
+    (merge-with-extra-keys . deterred-sync--merge-with-extra-keys))
   "An alist mapping DETERRED sync stragey names to functions.
 
 See the comments in the `deterred-sync' package for more detail.")
@@ -381,7 +384,7 @@ HOSTNAME is unused."
 
 (cl-defun deterred-sync--merge-hostname
     (db &key table-name hostname (hostname-attr 'hostname)
-         (timestamp-attr 'timestamp) dry-run log-buffer)
+        (timestamp-attr 'timestamp) dry-run log-buffer)
   "Merge records from other_db to DB by hostname and timestamp.
 
 Only syncs missing records from HOSTNAME (ones later than or equal to
@@ -419,12 +422,13 @@ non-nil, only print the actions to LOG-BUFFER without executing them."
                                (format "SELECT * FROM other_db.%s LIMIT 1" table-str))))
              (attrs (mapcar #'car sample-row))
              (attrs-str (mapconcat #'symbol-name attrs ", "))
-             (where-clause (if max-timestamp
-                               (format "WHERE %s >= %d AND %s = %s"
-                                       timestamp-str max-timestamp
-                                       hostname-str (deterred-db--escape hostname))
-                             (format "WHERE %s = %s"
-                                     hostname-str (deterred-db--escape hostname)))))
+             (where-clause
+              (if max-timestamp
+                  (format "WHERE %s >= %s AND %s = %s"
+                          timestamp-str (deterred-db--format-value max-timestamp)
+                          hostname-str (deterred-db--escape hostname))
+                (format "WHERE %s = %s"
+                        hostname-str (deterred-db--escape hostname)))))
         (sqlite-execute db
                         (format "INSERT OR IGNORE INTO main.%s (%s) SELECT %s FROM other_db.%s %s"
                                 table-str attrs-str attrs-str table-str where-clause)))
@@ -449,7 +453,7 @@ HOSTNAME is unused."
       (with-current-buffer log-buffer
         (insert (format "  Table %s: %d rows to merge\n"
                         table-str count))))
-    (unless dry-run
+    (unless (or dry-run (= count 0))
       (let* ((sample-row (car (deterred-db-select-alist
                                db
                                (format "SELECT * FROM other_db.%s LIMIT 1" table-str))))
@@ -468,14 +472,110 @@ HOSTNAME is unused."
         (sqlite-execute db query))
       (deterred-db-mark-updated db table-name))))
 
+(defun deterred-sync--select-other-with-main-matches
+    (db table-name key-attr extra-keys)
+  "Select other-only rows LEFT JOINed to main-only records by EXTRA-KEYS.
+
+DB is the SQLite connection.  TABLE-NAME and KEY-ATTR identify the
+table and its key column.  EXTRA-KEYS is a list of columns to match on.
+
+Return alists with all columns from other_db plus `main_match_id'
+\(nil when no match was found)."
+  (let* ((table-str (deterred-utils-ensure-string table-name))
+         (key-str (deterred-utils-ensure-string key-attr))
+         (join-clause
+          (mapconcat
+           (lambda (ek)
+             (let ((ek-str (deterred-utils-ensure-string ek)))
+               (format "m.%s = o.%s" ek-str ek-str)))
+           extra-keys " OR ")))
+    (deterred-db-select-alist
+     db
+     (format "SELECT DISTINCT o.*, m.%s AS main_match_id
+FROM other_db.%s o
+LEFT JOIN main.%s m ON (%s)
+WHERE o.%s != m.%s OR m.%s IS NULL"
+             key-str table-str table-str join-clause
+             key-str key-str key-str))))
+
+(defun deterred-sync--resolve-extra-key-merges
+    (db table-name key-attr update-tables-map rows dry-run log-buffer)
+  "Process merged rows: remap linked tables and delete main records.
+
+ROWS is the result of `deterred-sync--select-other-with-main-matches'.
+Only rows with non-nil `main_match_id' are processed.  For each,
+linked tables in UPDATE-TABLES-MAP are remapped from the main
+KEY-ATTR to the other KEY-ATTR, then the main record is deleted.
+
+DB is the SQLite connection.  TABLE-NAME and KEY-ATTR identify the
+table.  If DRY-RUN is non-nil, only log to LOG-BUFFER."
+  (when-let* ((merge-rows (seq-filter (lambda (r) (alist-get 'main_match_id r)) rows))
+              (table-str (deterred-utils-ensure-string table-name))
+              (key-str (deterred-utils-ensure-string key-attr)))
+    (dolist (row merge-rows)
+      (let ((main-id (alist-get 'main_match_id row))
+            (other-id (alist-get key-attr row)))
+        (when log-buffer
+          (with-current-buffer log-buffer
+            (insert (format "    Merge: main %s -> other %s\n"
+                            main-id other-id))))
+        (unless dry-run
+          (dolist (mapping update-tables-map)
+            (let ((linked-table (deterred-utils-ensure-string (car mapping)))
+                  (fk-col (deterred-utils-ensure-string (cdr mapping))))
+              (sqlite-execute
+               db
+               (format "UPDATE main.%s SET %s = ? WHERE %s = ?"
+                       linked-table fk-col fk-col)
+               (list other-id main-id)))))))
+    (unless dry-run
+      (sqlite-execute
+       db
+       (format "DELETE FROM main.%s WHERE %s IN (%s)"
+               table-str key-str
+               (mapconcat
+                (lambda (r) (deterred-db--format-value
+                             (alist-get 'main_match_id r)))
+                merge-rows ", "))))))
+
+(defun deterred-sync--insert-unmatched-other
+    (db table-name rows dry-run log-buffer)
+  "Insert other-only rows that have no main match by extra keys.
+
+ROWS is the result of `deterred-sync--select-other-with-main-matches'.
+Only rows with nil `main_match_id' are inserted.  The
+`main_match_id' column is stripped before inserting.
+
+DB is the SQLite connection.  TABLE-NAME identifies the table.
+If DRY-RUN is non-nil, only log to LOG-BUFFER."
+  (let ((new-rows (seq-filter
+                   (lambda (r) (not (alist-get 'main_match_id r)))
+                   rows)))
+    (when log-buffer
+      (with-current-buffer log-buffer
+        (insert (format "    Insert: %d new, %d merged\n"
+                        (length new-rows)
+                        (- (length rows) (length new-rows))))))
+    (when (and new-rows (not dry-run))
+      (deterred-db-insert-unsafe
+       db :table-name table-name
+       :values (mapcar (lambda (r)
+                         (assq-delete-all 'main_match_id (copy-alist r)))
+                       new-rows)))))
+
 (cl-defun deterred-sync--merge-with-extra-keys
     (db &key table-name hostname (key-attr 'id) extra-keys update-tables-map
         dry-run log-buffer)
   "Merge records by KEY-ATTR accounting for merged rows by EXTRA-KEYS.
 
+This works in one weird case - if TABLE-NAME has multiple nullable
+columns with unique attributes that can be merged.  This is currently
+used in `deterred-messengers', where the users table has multiple
+columns with ids in different messengers.
+
 EXTRA-KEYS is a list of additional key attributes in table.
 UPDATE-TABLES-MAP is an alist with tables linked to TABLE-NAME, where
-car is the linked table nake, and cdr is the foreign key to
+car is the linked table name, and cdr is the foreign key to
 TABLE-NAME.KEY-ATTR.
 
 The works as follows:
@@ -499,7 +599,21 @@ If DRY-RUN is non-nil, only print the actions to LOG-BUFFER without
 executing them.  DB is the SQLite connection object.
 
 HOSTNAME is unused."
-  (error "TODO implement"))
+  (let* ((table-str (deterred-utils-ensure-string table-name))
+         (rows (deterred-sync--select-other-with-main-matches
+                db table-name key-attr extra-keys)))
+    (when log-buffer
+      (with-current-buffer log-buffer
+        (insert (format "  Table %s: %d records only in other\n"
+                        table-str (length rows)))))
+    (with-sqlite-transaction db
+      (deterred-sync--resolve-extra-key-merges
+       db table-name key-attr update-tables-map rows dry-run log-buffer)
+      (deterred-sync--insert-unmatched-other
+       db table-name rows dry-run log-buffer)
+      (deterred-sync--merge-keys
+       db :table-name table-name :key-attrs (list key-attr)
+       :dry-run dry-run :log-buffer log-buffer))))
 
 (defun deterred-sync-config-sanity-check ()
   "Sanity check for DETERRED sync.
