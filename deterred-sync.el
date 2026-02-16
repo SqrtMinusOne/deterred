@@ -188,8 +188,8 @@ The return value is a list of alist with the following keys:
            (deterred-db-select-alist db "select * from meta_sync_info")))
          (all-hostnames-except-current
           (seq-sort-by
-           #'string-lessp
            #'identity
+           #'string-lessp
            (seq-filter
             (lambda (h) (not (equal h (system-name))))
             (seq-uniq
