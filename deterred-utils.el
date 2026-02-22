@@ -34,6 +34,15 @@
 
 (require 'deterred-format)
 
+(defun deterred-utils-ensure-string (value)
+  "Convert VALUE to a string.
+
+If VALUE is a symbol, return its name.  If VALUE is a number,
+return its printed representation.  Otherwise return VALUE as-is."
+  (cond ((symbolp value) (symbol-name value))
+        ((numberp value) (number-to-string value))
+        (t value)))
+
 (defun deterred-utils-csv-to-alist (file)
   "Read a CSV FILE into alist with `pcsv'."
   (let* ((data (pcsv-parse-file file))
