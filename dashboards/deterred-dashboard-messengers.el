@@ -104,6 +104,18 @@ ORDER BY name")))
     (top-days (name . "Top days by sent messages"))
     (top-weeks (name . "Top weeks by sent messages"))
     (top-months (name . "Top months by sent messages"))
+    (time-per-year (name . "Time spent per year"))
+    (personal-time-per-year (name . "Personal chats time per year"))
+    (group-time-per-year (name . "Group chats time per year"))
+    (time-per-month (name . "Time spent per month"))
+    (personal-time-per-month (name . "Personal chats time per month"))
+    (group-time-per-month (name . "Group chats time per month"))
+    (top-chats-time-per-month (name . "Top N chats time per month"))
+    (top-group-chats-time-per-month (name . "Top N group chats time per month"))
+    (messenger-time-per-year (name . "Time per messenger per year"))
+    (top-days-time (name . "Top days by time spent"))
+    (top-weeks-time (name . "Top weeks by time spent"))
+    (top-months-time (name . "Top months by time spent"))
     (numbers-data (name . "Numerical data"))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-messengers)
@@ -148,8 +160,20 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
-) AS chat_count;"
-           (append params `((:my-id . ,my-id))))))
+) AS chat_count,
+(
+  SELECT CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE 1 = 1
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+) AS total_hours;"
+           (append params `((:my-id . ,my-id)))))
+)
     `((sent-received-per-year
        . ,(deterred-db-select-template-alist
            db
@@ -255,7 +279,13 @@ GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
   mc.name,
   sum(CASE WHEN mm.sender_id = :my-id THEN 1 ELSE 0 END) sent,
   sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received,
-  count(*) total
+  count(*) total,
+  (SELECT CAST(COALESCE(sum(mmc.timestamp_end - mmc.timestamp_start), 0) / 3600.0 * 100 AS integer) / 100.0
+   FROM messenger_message_chain mmc
+   WHERE mmc.chat_id = mc.id
+     [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+     [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  ) hours
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
 WHERE mc.type = 'personal_chat'
@@ -274,7 +304,13 @@ LIMIT 20"
   mc.name,
   sum(CASE WHEN mm.sender_id = :my-id THEN 1 ELSE 0 END) sent,
   sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received,
-  count(*) total
+  count(*) total,
+  (SELECT CAST(COALESCE(sum(mmc.timestamp_end - mmc.timestamp_start), 0) / 3600.0 * 100 AS integer) / 100.0
+   FROM messenger_message_chain mmc
+   WHERE mmc.chat_id = mc.id
+     [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+     [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  ) hours
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
 WHERE mc.type = 'group'
@@ -376,7 +412,16 @@ ORDER BY month ASC"
   mm.messenger,
   sum(CASE WHEN mm.sender_id = :my-id THEN 1 ELSE 0 END) sent,
   sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received,
-  count(*) total
+  count(*) total,
+  (SELECT CAST(COALESCE(sum(mmc.timestamp_end - mmc.timestamp_start), 0) / 3600.0 * 100 AS integer) / 100.0
+   FROM messenger_message_chain mmc
+   INNER JOIN messenger_chat mc2 ON mc2.id = mmc.chat_id
+   WHERE EXISTS (SELECT 1 FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id AND mm2.messenger = mm.messenger)
+     [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+     [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+     [[AND mc2.type IN :chat-type]]
+     [[AND mc2.name IN :chat-name]]
+  ) hours
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
 WHERE 1 = 1
@@ -464,6 +509,240 @@ GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')
 ORDER BY sent DESC
 LIMIT 20"
            (append params `((:my-id . ,my-id)))))
+      (time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', mmc.timestamp_start, 'unixepoch') year,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE 1 = 1
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY year"
+           params))
+      (personal-time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', mmc.timestamp_start, 'unixepoch') year,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.type = 'personal_chat'
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY year"
+           params))
+      (group-time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', mmc.timestamp_start, 'unixepoch') year,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.type = 'group'
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY year"
+           params))
+      (time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE 1 = 1
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month"
+           params))
+      (personal-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.type = 'personal_chat'
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month"
+           params))
+      (group-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.type = 'group'
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month"
+           params))
+      (top-chats-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH top_chats AS (
+  SELECT
+    mc.name,
+    sum(mmc.timestamp_end - mmc.timestamp_start) total
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE mc.type = 'personal_chat'
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  GROUP BY mc.name
+  ORDER BY total DESC
+  LIMIT :n-top-chats
+)
+SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  mc.name,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month, mc.name
+ORDER BY month ASC"
+           params))
+      (top-group-chats-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH top_chats AS (
+  SELECT
+    mc.name,
+    sum(mmc.timestamp_end - mmc.timestamp_start) total
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE mc.type = 'group'
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  GROUP BY mc.name
+  ORDER BY total DESC
+  LIMIT :n-top-chats
+)
+SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  mc.name,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month, mc.name
+ORDER BY month ASC"
+           params))
+      (messenger-time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', sub.timestamp_start, 'unixepoch') year,
+  sub.messenger,
+  CAST(sum(sub.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM (
+  SELECT DISTINCT
+    mmc.id chain_id,
+    mmc.timestamp_start,
+    (SELECT mm2.messenger FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id LIMIT 1) messenger,
+    (mmc.timestamp_end - mmc.timestamp_start) duration
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE 1 = 1
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+) sub
+WHERE sub.messenger IS NOT NULL
+GROUP BY year, sub.messenger
+ORDER BY year ASC"
+           params))
+      (top-days-time
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  date(mmc.timestamp_start, 'unixepoch') day,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE 1 = 1
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY day
+ORDER BY hours DESC
+LIMIT 20"
+           params))
+      (top-weeks-time
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%W', mmc.timestamp_start, 'unixepoch') week,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE 1 = 1
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY week
+ORDER BY hours DESC
+LIMIT 20"
+           params))
+      (top-months-time
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mmc.timestamp_start, 'unixepoch') month,
+  CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM messenger_message_chain mmc
+INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+WHERE 1 = 1
+  [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+GROUP BY month
+ORDER BY hours DESC
+LIMIT 20"
+           params))
       (numbers-data . ,numbers-data))))
 
 (cl-defmethod deterred-dashboard-render-results ((_dashboard deterred-dashboard-messengers)
@@ -480,19 +759,22 @@ LIMIT 20"
     " messages across "
     (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'chat_count")))
            'bold)
-    " chats.\n\n"
+    " chats, spending "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'total_hours")))
+           'bold)
+    " hours in total.\n\n"
     (f-h2 "Top chats and users") "\n"
     (f-h3 "Top personal chats") "\n")
    (deterred-grid-print-with-org
     (alist-get 'data (alist-get 'top-personal-chats data))
-    :column-names '((name . "Chat") (sent . "Sent") (received . "Received") (total . "Total"))
+    :column-names '((name . "Chat") (sent . "Sent") (received . "Received") (total . "Total") (hours . "Hours"))
     :max-rows 10
     :grid-button t)
    "\n"
    (deterred-format (f-h3 "Top group chats") "\n")
    (deterred-grid-print-with-org
     (alist-get 'data (alist-get 'top-group-chats data))
-    :column-names '((name . "Chat") (sent . "Sent") (received . "Received") (total . "Total"))
+    :column-names '((name . "Chat") (sent . "Sent") (received . "Received") (total . "Total") (hours . "Hours"))
     :max-rows 10
     :grid-button t)
    "\n"
@@ -507,14 +789,16 @@ LIMIT 20"
                     (f-h3 "Top messengers") "\n")
    (deterred-grid-print-with-org
     (alist-get 'data (alist-get 'top-messengers data))
-    :column-names '((messenger . "Messenger") (sent . "Sent") (received . "Received") (total . "Total"))
+    :column-names '((messenger . "Messenger") (sent . "Sent") (received . "Received") (total . "Total") (hours . "Hours"))
     :max-rows 10
     :grid-button t)
    "\n"
    (deterred-format (f-h2 "Activity over time") "\n"))
   (deterred-dashboard-exec-python
    :python-code
-   "from matplotlib import pyplot as plt
+   "import warnings
+warnings.filterwarnings('ignore')
+from matplotlib import pyplot as plt
 from matplotlib.ticker import MaxNLocator
 from deterred import fig_to_b64
 
@@ -723,7 +1007,167 @@ print(json.dumps(images))"
     :column-names '((day . "Day") (sent . "Sent") (received . "Received"))
     :max-rows 10
     :grid-button t)
-   "\n"))
+   "\n"
+   (deterred-format (f-h3 "Top months by time") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'top-months-time data))
+    :column-names '((month . "Month") (hours . "Hours"))
+    :max-rows 10
+    :grid-button t)
+   "\n"
+   (deterred-format (f-h3 "Top weeks by time") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'top-weeks-time data))
+    :column-names '((week . "Week") (hours . "Hours"))
+    :max-rows 10
+    :grid-button t)
+   "\n"
+   (deterred-format (f-h3 "Top days by time") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'top-days-time data))
+    :column-names '((day . "Day") (hours . "Hours"))
+    :max-rows 10
+    :grid-button t)
+   "\n")
+  (insert (deterred-format (f-h2 "Time over time") "\n"))
+  (deterred-dashboard-exec-python
+   :python-code
+   "import warnings
+warnings.filterwarnings('ignore')
+from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from deterred import fig_to_b64
+
+import pandas as pd
+import json
+
+data = json.loads(input())
+df_time_year = pd.DataFrame(data['time-per-year']['data'])
+df_personal_time_year = pd.DataFrame(data['personal-time-per-year']['data'])
+df_group_time_year = pd.DataFrame(data['group-time-per-year']['data'])
+df_time_month = pd.DataFrame(data['time-per-month']['data'])
+df_personal_time_month = pd.DataFrame(data['personal-time-per-month']['data'])
+df_group_time_month = pd.DataFrame(data['group-time-per-month']['data'])
+df_top_chats_time = pd.DataFrame(data['top-chats-time-per-month']['data'])
+df_top_group_chats_time = pd.DataFrame(data['top-group-chats-time-per-month']['data'])
+df_messenger_time_year = pd.DataFrame(data['messenger-time-per-year']['data'])
+
+images = []
+
+def plot_hours_bar(ax, df, x_col, title):
+    if len(df) == 0:
+        return
+    ax.bar(df[x_col], df['hours'])
+    ax.set_title(title)
+    ax.set_xlabel(x_col.capitalize())
+    ax.set_ylabel('Hours')
+
+# Time per year
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_time_year, 'year', 'Time spent on messengers per year')
+images.append(fig_to_b64(fig))
+
+# Personal time per year
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_personal_time_year, 'year', 'Time spent on personal chats per year')
+images.append(fig_to_b64(fig))
+
+# Group time per year
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_group_time_year, 'year', 'Time spent on group chats per year')
+images.append(fig_to_b64(fig))
+
+# Time per month
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_time_month, 'month', 'Time spent on messengers per month')
+if len(df_time_month) > 30:
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+images.append(fig_to_b64(fig))
+
+# Personal time per month
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_personal_time_month, 'month', 'Time spent on personal chats per month')
+if len(df_personal_time_month) > 30:
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+images.append(fig_to_b64(fig))
+
+# Group time per month
+fig, ax = plt.subplots(figsize=(8, 5))
+plot_hours_bar(ax, df_group_time_month, 'month', 'Time spent on group chats per month')
+if len(df_group_time_month) > 30:
+    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+images.append(fig_to_b64(fig))
+
+# Top N personal chats time per month
+if len(df_top_chats_time) > 0:
+    df_pivot = df_top_chats_time.pivot(index='month', columns='name', values='hours').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pivot.plot(ax=ax, kind='line')
+    ax.set_title('Time in top N personal chats per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Hours')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Top N group chats time per month
+if len(df_top_group_chats_time) > 0:
+    df_pivot = df_top_group_chats_time.pivot(index='month', columns='name', values='hours').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pivot.plot(ax=ax, kind='line')
+    ax.set_title('Time in top N group chats per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Hours')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Messenger time per year
+if len(df_messenger_time_year) > 0:
+    df_pivot = df_messenger_time_year.pivot(index='year', columns='messenger', values='hours').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Time per messenger per year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Hours')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+print(json.dumps(images))"
+   :input data
+   :on-success
+   (lambda (images)
+     (insert (deterred-format (f-h3 "Time spent per year") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 0))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Personal chats time per year") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 1))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Group chats time per year") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 2))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Time spent per month") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 3))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Personal chats time per month") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 4))
+     (insert "\n")
+     (insert (deterred-format (f-h3 "Group chats time per month") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 5))
+     (insert "\n")
+     (when (elt images 6)
+       (insert (deterred-format (f-h3 "Time in top N personal chats per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 6))
+       (insert "\n"))
+     (when (elt images 7)
+       (insert (deterred-format (f-h3 "Time in top N group chats per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 7))
+       (insert "\n"))
+     (when (elt images 8)
+       (insert (deterred-format (f-h3 "Time per messenger per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 8))
+       (insert "\n")))))
 
 (provide 'deterred-dashboard-messengers)
 ;;; deterred-dashboard-messengers.el ends here
