@@ -287,30 +287,36 @@ are added to TARGET, overwriting existing keys if present."
       item))
    list))
 
-(defun deterred-utils-normalize-by-timeout (chains timeout)
+(defun deterred-utils-normalize-by-timeout (chains timeout &optional merge-data-fn)
   "Normalize CHAINS of timestamps by TIMEOUT.
 
-A chain is a either a list of UNIX timestamps, or a list of cons cells
-with UNIX timestamps, where `car' is the start and `cdr' is the end of
-a timespan.
+A chain is a list of entries, where each entry is a list
+\(START END DATA\).  START is a UNIX timestamp, END is a UNIX timestamp
+or nil (defaults to START), and DATA is arbitrary data or nil.
 
 TIMEOUT is a number of seconds.
 
-The function returns chains in the same order, converted to timespans
-\(cons cells\), with gaps less than TIMEOUT removed.  This is similar to
-what WakaTime does by converting a list of individual \"heartbeats\"
-into timestamps."
+MERGE-DATA-FN, when non-nil, is called with two DATA values when
+entries from the same chain are merged.  It should return the combined
+DATA.  When nil, the first entry's DATA is kept.
+
+The function returns chains in the same order, with each entry as
+\(START END DATA\), where START and END are always set.  Gaps less than
+TIMEOUT are removed.  This is similar to what WakaTime does by
+converting a list of individual \"heartbeats\" into timespans."
   (let (series
         normalized-series
         current-item)
-    ;; Merge chain into one series
-    ;; A series is a list of lists (chain-id, start, end)
+    ;; Merge chains into one series
+    ;; A series item is a list (chain-id start end data)
     (cl-loop for i from 0
              for chain in chains
-             do (cl-loop for value in chain
-                         do (if (consp value)
-                                (push (list i (car value) (cdr value)) series)
-                              (push (list i value value) series))))
+             do (cl-loop for entry in chain
+                         do (push (list i
+                                        (nth 0 entry)
+                                        (or (nth 1 entry) (nth 0 entry))
+                                        (nth 2 entry))
+                                  series)))
     ;; Normalize series
     (dolist (item (append (seq-sort-by (lambda (d) (nth 1 d)) #'< series) (list nil)))
       (cond
@@ -318,21 +324,30 @@ into timestamps."
        ((null item) (push current-item normalized-series))
        (t (let ((is-timeout (> (- (nth 1 item) (nth 2 current-item)) timeout))
                 (is-chain-switch (not (= (nth 0 item) (nth 0 current-item)))))
-            (unless is-timeout
-              (setf (nth 2 current-item) (nth 1 item)))
-            (when (or is-timeout is-chain-switch)
+            (cond
+             (is-timeout
               (push current-item normalized-series)
-              (setq current-item item))))))
-    (setq my/test normalized-series)
+              (setq current-item item))
+             (is-chain-switch
+              (setf (nth 2 current-item) (nth 1 item))
+              (push current-item normalized-series)
+              (setq current-item item))
+             (t
+              (setf (nth 2 current-item) (max (nth 2 current-item) (nth 2 item)))
+              (when merge-data-fn
+                (setf (nth 3 current-item)
+                      (funcall merge-data-fn
+                               (nth 3 current-item)
+                               (nth 3 item))))))))))
     ;; Back into chains
     (mapcar
-     (lambda (series)
+     (lambda (group)
        (seq-sort-by
         #'car
         #'<
         (mapcar
-         (lambda (item) (cons (nth 1 item) (nth 2 item)))
-         (cdr series))))
+         (lambda (item) (list (nth 1 item) (nth 2 item) (nth 3 item)))
+         (cdr group))))
      (seq-sort-by
       #'car
       #'<
