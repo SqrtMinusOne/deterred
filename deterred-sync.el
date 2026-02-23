@@ -134,7 +134,11 @@
                            wakatime_branches wakatime_categories wakatime_editors
                            wakatime_entities wakatime_grand_total wakatime_languages
                            wakatime_machines wakatime_operating_systems
-                           wakatime_projects)))
+                           wakatime_projects))
+    ;; `deterred-ai'
+    (merge-hostname :table-name ai_usage_item)
+    (merge-keys :table-name ai_usage_file
+                :key-attrs (message_id file_path)))
   "The order of sync strategy application for DETERRED.
 
 This is a list.  In each element, the first item is a strategy name

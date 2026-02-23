@@ -489,11 +489,204 @@ If CALLBACK is non-nil, call it when done."
        (deterred-ai--store entries)
        (when callback (funcall callback))))))
 
+(defun deterred-ai--parse-stats (stats-path)
+  "Parse a Claude Code stats-cache JSON file at STATS-PATH.
+
+Returns a list of fake entry alists, one per estimated message.
+Uses `dailyActivity' for message counts, `dailyModelTokens' for
+per-model token totals, and `modelUsage' for token-type ratios."
+  (let* ((json-object-type 'alist)
+         (json-array-type 'vector)
+         (json-key-type 'symbol)
+         (data (json-read-file (expand-file-name stats-path)))
+         (hostname (system-name))
+         ;; Build date → messageCount lookup
+         (msg-counts (make-hash-table :test 'equal))
+         ;; Build per-model token-type ratios from modelUsage
+         (model-ratios (make-hash-table :test 'equal))
+         result)
+    ;; Parse dailyActivity into msg-counts
+    (cl-loop for entry across (alist-get 'dailyActivity data)
+             do (puthash (alist-get 'date entry)
+                         (alist-get 'messageCount entry)
+                         msg-counts))
+    ;; Parse modelUsage into ratios
+    (cl-loop
+     for (model-sym . usage) in (alist-get 'modelUsage data)
+     do (let* ((model (symbol-name model-sym))
+               (inp (or (alist-get 'inputTokens usage) 0))
+               (out (or (alist-get 'outputTokens usage) 0))
+               (cr (or (alist-get 'cacheReadInputTokens usage) 0))
+               (cc (or (alist-get 'cacheCreationInputTokens usage) 0))
+               (total (+ inp out cr cc)))
+          (puthash model
+                   (if (zerop total)
+                       '((input . 0.25) (output . 0.25)
+                         (cache-read . 0.25) (cache-create . 0.25))
+                     `((input . ,(/ (float inp) total))
+                       (output . ,(/ (float out) total))
+                       (cache-read . ,(/ (float cr) total))
+                       (cache-create . ,(/ (float cc) total))))
+                   model-ratios)))
+    ;; Iterate dailyModelTokens
+    (cl-loop
+     for day-entry across (alist-get 'dailyModelTokens data)
+     do (let* ((date-str (alist-get 'date day-entry))
+               (timestamp (truncate
+                           (float-time
+                            (encode-time
+                             (decoded-time-set-defaults
+                              (iso8601-parse-date date-str))))))
+               (tokens-by-model (alist-get 'tokensByModel day-entry))
+               (day-msg-count (or (gethash date-str msg-counts) 1))
+               ;; Sum all tokens for this day to distribute messages
+               (day-total-tokens
+                (cl-loop for (_m . toks) in tokens-by-model sum toks))
+               ;; Distribute messages proportionally, track remainder
+               (allocated 0)
+               (model-allocations nil))
+          ;; First pass: allocate messages proportionally
+          (cl-loop
+           for (model-sym . model-tokens) in tokens-by-model
+           do (let* ((model (symbol-name model-sym))
+                     (frac (if (zerop day-total-tokens) 1.0
+                             (/ (float model-tokens) day-total-tokens)))
+                     (n (max 1 (round (* day-msg-count frac)))))
+                (push (list model model-tokens n) model-allocations)
+                (setq allocated (+ allocated n))))
+          ;; Adjust: add/remove from largest allocation to match total
+          (when (and model-allocations (/= allocated day-msg-count))
+            (let ((biggest (car (seq-sort-by #'cl-caddr #'> model-allocations))))
+              (setf (cl-caddr biggest)
+                    (max 1 (+ (cl-caddr biggest) (- day-msg-count allocated))))))
+          ;; Create fake entries
+          (dolist (alloc model-allocations)
+            (let* ((model (car alloc))
+                   (model-tokens (cadr alloc))
+                   (n-msgs (cl-caddr alloc))
+                   (tokens-per-msg (/ model-tokens n-msgs))
+                   (ratios (or (gethash model model-ratios)
+                               '((input . 0.25) (output . 0.25)
+                                 (cache-read . 0.25) (cache-create . 0.25)))))
+              (dotimes (i n-msgs)
+                (push
+                 (list
+                  (cons 'message-id
+                        (format "fake_%s_%s_%d" date-str model (1+ i)))
+                  (cons 'timestamp timestamp)
+                  (cons 'session-id "fake_stats")
+                  (cons 'model-name model)
+                  (cons 'total-tokens tokens-per-msg)
+                  (cons 'input-tokens
+                        (round (* tokens-per-msg
+                                  (alist-get 'input ratios))))
+                  (cons 'output-tokens
+                        (round (* tokens-per-msg
+                                  (alist-get 'output ratios))))
+                  (cons 'cache-creation-input-tokens
+                        (round (* tokens-per-msg
+                                  (alist-get 'cache-create ratios))))
+                  (cons 'cache-read-input-tokens
+                        (round (* tokens-per-msg
+                                  (alist-get 'cache-read ratios))))
+                  (cons 'hostname hostname)
+                  (cons 'cwd nil)
+                  (cons 'project-id nil)
+                  (cons 'request-id nil)
+                  (cons 'version nil)
+                  (cons 'files nil))
+                 result))))))
+    (nreverse result)))
+
+(defun deterred-ai--store-stats (entries)
+  "Store fake stats ENTRIES, skipping dates with real data.
+
+Queries the database for dates that already have is_stats = 0
+entries, filters ENTRIES to exclude those dates, calculates cost,
+and inserts with is_stats = 1."
+  (let* ((db (deterred-db--init))
+         (real-dates
+          (mapcar (lambda (row) (alist-get 'day row))
+                  (deterred-db-select-alist
+                   db "SELECT DISTINCT date(timestamp, 'unixepoch') day
+FROM ai_usage_item WHERE is_stats = 0")))
+         (real-dates-set (make-hash-table :test 'equal))
+         (filtered nil)
+         item-values)
+    (dolist (d real-dates)
+      (puthash d t real-dates-set))
+    ;; Filter out entries whose date matches real data
+    (dolist (entry entries)
+      (let* ((ts (alist-get 'timestamp entry))
+             (date-str (format-time-string "%Y-%m-%d" (seconds-to-time ts) t)))
+        (unless (gethash date-str real-dates-set)
+          (push entry filtered))))
+    (setq filtered (nreverse filtered))
+    ;; Calculate cost and build DB values
+    (dolist (entry filtered)
+      (let ((cost (deterred-ai--calculate-cost entry)))
+        (push `((message_id  . ,(alist-get 'message-id entry))
+                (timestamp   . ,(alist-get 'timestamp entry))
+                (session_id  . ,(alist-get 'session-id entry))
+                (model_name  . ,(alist-get 'model-name entry))
+                (total_tokens . ,(alist-get 'total-tokens entry))
+                (usd_cost    . ,(round (* cost 1000000)))
+                (is_stats    . 1)
+                (hostname    . ,(alist-get 'hostname entry))
+                (cwd         . nil)
+                (project_id  . nil)
+                (request_id  . nil)
+                (version     . nil)
+                (input_tokens . ,(alist-get 'input-tokens entry))
+                (output_tokens . ,(alist-get 'output-tokens entry))
+                (cache_creation_input_tokens
+                 . ,(alist-get 'cache-creation-input-tokens entry))
+                (cache_read_input_tokens
+                 . ,(alist-get 'cache-read-input-tokens entry)))
+              item-values)))
+    (when item-values
+      (with-sqlite-transaction db
+        (deterred-db-insert-unsafe
+         db :table-name 'ai_usage_item
+         :values item-values
+         :conflict-action 'do-nothing
+         :conflict-attrs '(message_id))
+        (deterred-db-mark-updated db 'ai_usage_item)))
+    (message "deterred-ai: stats: %d entries parsed, %d skipped (real data), %d stored"
+             (length entries)
+             (- (length entries) (length filtered))
+             (length item-values))))
+
+(defun deterred-ai-load-stats ()
+  "Load AI usage data from a Claude Code stats-cache JSON file.
+
+Prompts for the file path, parses it, and stores fake entries for
+dates that have no real JSONL data."
+  (interactive)
+  (let ((stats-path (read-file-name
+                     "Stats cache JSON: "
+                     deterred-ai-claude-data-dir
+                     (expand-file-name "stats-cache.json"
+                                       deterred-ai-claude-data-dir)
+                     t)))
+    (deterred-ai--ensure-pricing
+     (lambda ()
+       (let ((entries (deterred-ai--parse-stats stats-path)))
+         (deterred-ai--store-stats entries))))))
+
 ;;;###autoload
 (defclass deterred-ai-usage (deterred-source)
   ((name :initform "AI Usage")
    (warn-days :initform 1))
   "DETERRED source for AI usage data (Claude Code).")
+
+(cl-defmethod deterred-source-actions ((_source deterred-ai-usage) &optional callback)
+  "Run an action for the AI usage source.
+
+Run CALLBACK when done."
+  (deterred-source--actions-pick
+   '(("Load stats cache JSON" deterred-ai-load-stats nil))
+   callback))
 
 (cl-defmethod deterred-source-sync ((_source deterred-ai-usage) &optional callback)
   "Sync AI usage data from Claude Code JSONL files.
