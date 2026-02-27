@@ -113,6 +113,8 @@ ORDER BY name")))
     (top-chats-time-per-month (name . "Top N chats time per month"))
     (top-group-chats-time-per-month (name . "Top N group chats time per month"))
     (messenger-time-per-year (name . "Time per messenger per year"))
+    (mobile-pc-time-per-year (name . "Mobile vs PC time per year"))
+    (mobile-pc-time-per-month (name . "Mobile vs PC time per month"))
     (top-days-time (name . "Top days by time spent"))
     (top-weeks-time (name . "Top weeks by time spent"))
     (top-months-time (name . "Top months by time spent"))
@@ -171,7 +173,55 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
-) AS total_hours;"
+) AS total_hours,
+(
+  SELECT CAST(COALESCE(sum(sub.duration), 0) / 3600.0 * 100 AS integer) / 100.0
+  FROM (
+    SELECT DISTINCT
+      mmc.id,
+      (mmc.timestamp_end - mmc.timestamp_start) duration,
+      (SELECT CASE
+        WHEN sum(CASE WHEN mm2.hostname = '<mobile>' THEN 1 ELSE 0 END)
+           > sum(CASE WHEN mm2.hostname != '<mobile>' THEN 1 ELSE 0 END)
+        THEN 'mobile' ELSE 'pc' END
+       FROM messenger_message mm2
+       WHERE mm2.chain_id = mmc.id AND mm2.hostname IS NOT NULL
+       HAVING count(*) > 0) device
+    FROM messenger_message_chain mmc
+    INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+    WHERE 1 = 1
+      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+      [[AND mc.type IN :chat-type]]
+      [[AND mc.name IN :chat-name]]
+      [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  ) sub
+  WHERE sub.device = 'mobile'
+) AS mobile_hours,
+(
+  SELECT CAST(COALESCE(sum(sub.duration), 0) / 3600.0 * 100 AS integer) / 100.0
+  FROM (
+    SELECT DISTINCT
+      mmc.id,
+      (mmc.timestamp_end - mmc.timestamp_start) duration,
+      (SELECT CASE
+        WHEN sum(CASE WHEN mm2.hostname = '<mobile>' THEN 1 ELSE 0 END)
+           > sum(CASE WHEN mm2.hostname != '<mobile>' THEN 1 ELSE 0 END)
+        THEN 'mobile' ELSE 'pc' END
+       FROM messenger_message mm2
+       WHERE mm2.chain_id = mmc.id AND mm2.hostname IS NOT NULL
+       HAVING count(*) > 0) device
+    FROM messenger_message_chain mmc
+    INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+    WHERE 1 = 1
+      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+      [[AND mc.type IN :chat-type]]
+      [[AND mc.name IN :chat-name]]
+      [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  ) sub
+  WHERE sub.device = 'pc'
+) AS pc_hours;"
            (append params `((:my-id . ,my-id)))))
 )
     `((sent-received-per-year
@@ -689,6 +739,70 @@ WHERE sub.messenger IS NOT NULL
 GROUP BY year, sub.messenger
 ORDER BY year ASC"
            params))
+      (mobile-pc-time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', sub.timestamp_start, 'unixepoch') year,
+  sub.device,
+  CAST(sum(sub.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM (
+  SELECT DISTINCT
+    mmc.id chain_id,
+    mmc.timestamp_start,
+    (SELECT CASE
+      WHEN sum(CASE WHEN mm2.hostname = '<mobile>' THEN 1 ELSE 0 END)
+         > sum(CASE WHEN mm2.hostname != '<mobile>' THEN 1 ELSE 0 END)
+      THEN 'mobile' ELSE 'pc' END
+     FROM messenger_message mm2
+     WHERE mm2.chain_id = mmc.id AND mm2.hostname IS NOT NULL
+     HAVING count(*) > 0) device,
+    (mmc.timestamp_end - mmc.timestamp_start) duration
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE 1 = 1
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+) sub
+WHERE sub.device IS NOT NULL
+GROUP BY year, sub.device
+ORDER BY year ASC"
+           params))
+      (mobile-pc-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', sub.timestamp_start, 'unixepoch') month,
+  sub.device,
+  CAST(sum(sub.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM (
+  SELECT DISTINCT
+    mmc.id chain_id,
+    mmc.timestamp_start,
+    (SELECT CASE
+      WHEN sum(CASE WHEN mm2.hostname = '<mobile>' THEN 1 ELSE 0 END)
+         > sum(CASE WHEN mm2.hostname != '<mobile>' THEN 1 ELSE 0 END)
+      THEN 'mobile' ELSE 'pc' END
+     FROM messenger_message mm2
+     WHERE mm2.chain_id = mmc.id AND mm2.hostname IS NOT NULL
+     HAVING count(*) > 0) device,
+    (mmc.timestamp_end - mmc.timestamp_start) duration
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  WHERE 1 = 1
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+) sub
+WHERE sub.device IS NOT NULL
+GROUP BY month, sub.device
+ORDER BY month ASC"
+           params))
       (top-days-time
        . ,(deterred-db-select-template-alist
            db
@@ -762,7 +876,13 @@ LIMIT 20"
     " chats, spending "
     (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'total_hours")))
            'bold)
-    " hours in total.\n\n"
+    " hours in total ("
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'mobile_hours")))
+           'bold)
+    " mobile, "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'pc_hours")))
+           'bold)
+    " PC).\n\n"
     (f-h2 "Top chats and users") "\n"
     (f-h3 "Top personal chats") "\n")
    (deterred-grid-print-with-org
@@ -1051,6 +1171,8 @@ df_group_time_month = pd.DataFrame(data['group-time-per-month']['data'])
 df_top_chats_time = pd.DataFrame(data['top-chats-time-per-month']['data'])
 df_top_group_chats_time = pd.DataFrame(data['top-group-chats-time-per-month']['data'])
 df_messenger_time_year = pd.DataFrame(data['messenger-time-per-year']['data'])
+df_mobile_pc_year = pd.DataFrame(data['mobile-pc-time-per-year']['data'])
+df_mobile_pc_month = pd.DataFrame(data['mobile-pc-time-per-month']['data'])
 
 images = []
 
@@ -1134,6 +1256,36 @@ if len(df_messenger_time_year) > 0:
 else:
     images.append(None)
 
+# Mobile vs PC time per year
+if len(df_mobile_pc_year) > 0:
+    df_pivot = df_mobile_pc_year.pivot(index='year', columns='device', values='hours').fillna(0)
+    df_pct = df_pivot.div(df_pivot.sum(axis=1), axis=0) * 100
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pct.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Mobile vs PC messenger time per year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('%')
+    ax.set_ylim(0, 100)
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Mobile vs PC time per month
+if len(df_mobile_pc_month) > 0:
+    df_pivot = df_mobile_pc_month.pivot(index='month', columns='device', values='hours').fillna(0)
+    df_pct = df_pivot.div(df_pivot.sum(axis=1), axis=0) * 100
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pct.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Mobile vs PC messenger time per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('%')
+    ax.set_ylim(0, 100)
+    if len(df_pct) > 30:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
 print(json.dumps(images))"
    :input data
    :on-success
@@ -1167,6 +1319,14 @@ print(json.dumps(images))"
      (when (elt images 8)
        (insert (deterred-format (f-h3 "Time per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 8))
+       (insert "\n"))
+     (when (elt images 9)
+       (insert (deterred-format (f-h3 "Mobile vs PC time per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 9))
+       (insert "\n"))
+     (when (elt images 10)
+       (insert (deterred-format (f-h3 "Mobile vs PC time per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 10))
        (insert "\n")))))
 
 (provide 'deterred-dashboard-messengers)

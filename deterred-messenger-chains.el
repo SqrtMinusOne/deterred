@@ -284,5 +284,57 @@ rules), intertwines them across chats, and saves results."
         (message "Saved %d chains across %d chats"
                  total-chains (length normalized))))))
 
+(defun deterred-messenger-chains-compute-hostname (&optional db)
+  "Update the hostname attribute in messages.
+
+DB is the SQLite database object."
+  (interactive)
+  (let* ((db (or db (deterred-db--init)))
+         (borders
+          (car
+           (deterred-db-select-alist
+            db
+            "SELECT
+               min(notafk_start_timestamp) start,
+               max(notafk_end_timestamp) end
+             FROM activitywatch_notafk_period"))))
+    (with-sqlite-transaction db
+      ;; Step 1: Set hostname based on whether timestamp is in tracked range
+      (message "Marking messages...")
+      (sqlite-execute
+       db
+       "UPDATE messenger_message SET hostname = CASE
+          WHEN timestamp >= ? AND timestamp <= ? THEN '<mobile>'
+          ELSE null
+        END"
+       (list
+        (alist-get 'start borders)
+        (alist-get 'end borders)))
+      ;; Step 2: Build temp table with matches via join
+      (message "Joining messages with notafk periods...")
+      (sqlite-execute db "DROP TABLE IF EXISTS matched_hostname")
+      (sqlite-execute
+       db
+       "CREATE TEMP TABLE matched_hostname AS
+        SELECT m.id, a.hostname
+        FROM messenger_message m
+        JOIN activitywatch_notafk_period a
+          ON m.timestamp >= a.notafk_start_timestamp
+         AND m.timestamp <= a.notafk_end_timestamp")
+      (sqlite-execute
+       db
+       "CREATE INDEX temp.idx_matched_id ON matched_hostname (id)")
+      ;; Step 3: Overwrite matched messages with actual hostname
+      (message "Updating matched messages...")
+      (sqlite-execute
+       db
+       "UPDATE messenger_message
+        SET hostname = (SELECT h.hostname FROM matched_hostname h
+                        WHERE h.id = messenger_message.id)
+        WHERE id IN (SELECT id FROM matched_hostname)")
+      ;; Cleanup
+      (sqlite-execute db "DROP TABLE IF EXISTS matched_hostname")
+      (message "Hostname assignment complete."))))
+
 (provide 'deterred-messenger-chains)
 ;;; deterred-messenger-chains.el ends here
