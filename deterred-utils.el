@@ -31,8 +31,11 @@
 (require 'validate)
 (require 'backtrace)
 (require 'request)
+(require 'org)
 
 (require 'deterred-format)
+
+(declare-function evil-define-key* "evil-core")
 
 (defun deterred-utils-ensure-string (value)
   "Convert VALUE to a string.

@@ -40,6 +40,8 @@
 (require 'deterred-grid)
 (require 'deterred-utils)
 
+(declare-function evil-define-key* "evil-core")
+
 (defcustom deterred-dashboards nil
   "List of DETERRED dashboard objects."
   :type 'list

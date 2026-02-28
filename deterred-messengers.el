@@ -29,6 +29,7 @@
 (require 'cl-lib)
 (require 'uuidgen)
 (require 'dom)
+(require 'iso8601)
 
 (require 'deterred-db)
 (require 'deterred-source)

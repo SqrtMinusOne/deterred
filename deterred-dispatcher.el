@@ -39,6 +39,8 @@
 (require 'deterred-utils)
 (require 'deterred-backup)
 
+(declare-function evil-define-key* "evil-core")
+
 (defconst deterred-dispatcher-buffer-name "*DETERRED*"
   "Default buffer name for org-journal-tags status.")
 

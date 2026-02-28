@@ -33,6 +33,8 @@
 (require 'deterred-format)
 (require 'vtable)
 
+(declare-function evil-define-key* "evil-core")
+
 (define-derived-mode deterred-grid-mode special-mode "DETERRED Grid"
   :group 'deterred
   (setq-local buffer-read-only t))
