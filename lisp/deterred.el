@@ -1,6 +1,6 @@
-;;; deterred.el --- TODO -*- lexical-binding: t -*-
+;;; deterred.el --- Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard. -*- lexical-binding: t -*-
 
-;; Copyright (C) 2024 Korytov Pavel
+;; Copyright (C) 2026 Korytov Pavel
 
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
@@ -40,32 +40,32 @@
 (require 'deterred-grid)
 (require 'deterred-dashboard)
 (require 'deterred-dispatcher)
+(require 'deterred-source)
 
-;; Datasources
-(require 'deterred-locations)
 (require 'deterred-activitywatch)
+(require 'deterred-ai)
 (require 'deterred-digikam)
 (require 'deterred-habits)
+(require 'deterred-hledger)
+(require 'deterred-hledger-exchange)
+(require 'deterred-locations)
+(require 'deterred-messenger-chains)
 (require 'deterred-messengers)
 (require 'deterred-mpd)
+(require 'deterred-mpd-emms)
 (require 'deterred-org)
 (require 'deterred-org-journal-tags)
+(require 'deterred-org-roam)
 (require 'deterred-podcasts)
 (require 'deterred-read-it-later)
 (require 'deterred-social)
-(require 'deterred-wakatime)
-
-;; Integrations
-(require 'deterred-mpd-emms)
+(require 'deterred-transport)
 (require 'deterred-wakatime-dired)
+(require 'deterred-wakatime)
 
 (defgroup deterred nil
   "Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard."
   :group 'applications)
-
-(defgroup deterred-sources nil
-  "Sources configuration for DETERRED."
-  :group 'deterred)
 
 ;;;###autoload
 (defun deterred ()

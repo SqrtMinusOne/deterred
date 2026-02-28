@@ -53,8 +53,11 @@
   :type 'string)
 
 (defconst deterred-db-migrations-location
-  (or (and load-file-name (concat (file-name-directory load-file-name) "migrations"))
-      (concat default-directory "migrations"))
+  (expand-file-name
+   (or (and load-file-name
+            (concat (file-name-directory load-file-name)
+                    "/migrations/"))
+       (concat default-directory "../migrations/")))
   "The path to Deterred migrations.")
 
 (defconst deterred-db--query-create-version-table

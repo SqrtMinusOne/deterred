@@ -640,11 +640,14 @@ Press 's' or 'w' on an image to save it to a file."
 (defun deterred-dashboard--get-pythonpath ()
   "Get PYTHONPATH for DETERRED to load the python module."
   (let* ((deterred-folder
-          (or
-           (and load-file-name
-                (concat (file-name-directory load-file-name) "python/"))
-           (concat (string-replace "/dashboards" "" default-directory)
-                   "python/"))))
+          (expand-file-name
+           (or
+            (and load-file-name
+                 (concat (file-name-directory load-file-name)
+                         "./python/"))
+            (concat
+             (string-replace "/dashboards" "" default-directory)
+             "../python/")))))
     (string-join
      (append (string-split (or (getenv "PYTHONPATH") "") ":" t)
              (list deterred-folder))

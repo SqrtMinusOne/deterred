@@ -28,6 +28,8 @@
 ;;; Code:
 (require 'rx)
 (require 'org)
+(require 'org-clock-agg)
+(require 'org-ql)
 (require 'deterred-utils)
 
 (defun deterred-org--parse-get-parent-headings (elem)
@@ -73,17 +75,18 @@ stored, e.g., as follows:
 The function has to be run in the same buffer as ELEM.
 
 Return a UNIX timestamp or nil."
-  (save-excursion
-    (goto-char (org-element-property :contents-begin elem))
-    (save-match-data
-      (when (re-search-forward deterred-org--entered-on-regexp
-                               (org-element-property :contents-end elem)
-                               t)
-        (time-convert
-         (encode-time
-          (org-parse-time-string
-           (substring-no-properties (match-string 1))))
-         'integer)))))
+  (when (org-element-property :contents-begin elem)
+    (save-excursion
+      (goto-char (org-element-property :contents-begin elem))
+      (save-match-data
+        (when (re-search-forward deterred-org--entered-on-regexp
+                                 (org-element-property :contents-end elem)
+                                 t)
+          (time-convert
+           (encode-time
+            (org-parse-time-string
+             (substring-no-properties (match-string 1))))
+           'integer))))))
 
 (defun deterred-org--parse-buffer ()
   "Parse an `org-mode' buffer."
@@ -92,15 +95,28 @@ Return a UNIX timestamp or nil."
       (lambda (elem)
         (when-let ((todo-keyword (org-element-property :todo-keyword elem))
                    (title (org-element-property :raw-value elem)))
-          (let ((todo-keyword (substring-no-properties todo-keyword))
-                (deadline (deterred-org--parse-timestamp elem :deadline))
-                (closed (deterred-org--parse-timestamp elem :closed))
-                (scheduled (deterred-org--parse-timestamp elem :scheduled))
-                (created (deterred-org--parse-entered-on elem))
-                (path (deterred-org--parse-get-path elem)))
+          (let* ((todo-keyword (substring-no-properties todo-keyword))
+                 (deadline (deterred-org--parse-timestamp elem :deadline))
+                 (closed (deterred-org--parse-timestamp elem :closed))
+                 (scheduled (deterred-org--parse-timestamp elem :scheduled))
+                 (created (deterred-org--parse-entered-on elem))
+                 (path (deterred-org--parse-get-path elem))
+                 (clocks (when (org-element-property :contents-begin elem)
+                           (org-clock-agg--parse-clocks elem)))
+                 (clocked-seconds
+                  (when clocks
+                    (seq-reduce (lambda (acc c) (+ acc (alist-get :duration c)))
+                                clocks 0)))
+                 (tags-val (org-ql--tags-at (point)))
+                 (tags (seq-filter
+                        #'stringp ;; to filter out `org-ql-nil'
+                        (append (unless (eq (car tags-val) 'org-ql-nil)
+                                  (car tags-val))
+                                (unless (eq (cdr tags-val) 'org-ql-nil)
+                                  (cdr tags-val))))))
             (push
              (deterred-utils-make-alist title todo-keyword deadline scheduled path
-                                        closed created)
+                                        closed created clocked-seconds clocks tags)
              res)))))
     (nreverse res)))
 
