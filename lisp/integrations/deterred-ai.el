@@ -32,6 +32,7 @@
 (require 'deterred-utils)
 (require 'request)
 (require 'iso8601)
+(require 'subr-x)
 
 (defconst deterred-ai--pricing-litellm-url
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
@@ -44,6 +45,12 @@
 (defcustom deterred-ai-claude-data-dir (or (getenv "CLAUDE_CONFIG_DIR")
                                            (expand-file-name "~/.claude/"))
   "Path to Claude data dir."
+  :group 'deterred
+  :type 'file)
+
+(defcustom deterred-ai-codex-data-dir (or (getenv "CODEX_HOME")
+                                          (expand-file-name "~/.codex/"))
+  "Path to Codex data dir."
   :group 'deterred
   :type 'file)
 
@@ -125,10 +132,10 @@ DATA is a response from LiteLLM."
   (let ((val (alist-get key alist)))
     (if (eq val :json-null) nil val)))
 
-(defconst deterred-ai--file-tool-names '("Edit" "Write" "NotebookEdit")
+(defconst deterred-ai--claude-file-tool-names '("Edit" "Write" "NotebookEdit")
   "Tool names that modify files.")
 
-(defun deterred-ai--process-assistant-record (record messages uuid-to-msg-id)
+(defun deterred-ai--claude-process-assistant-record (record messages uuid-to-msg-id)
   "Extract data from an assistant RECORD into MESSAGES hash table.
 
 MESSAGES is keyed by message.id.  UUID-TO-MSG-ID maps record uuid to
@@ -173,7 +180,7 @@ message.id for linking user records."
         (cl-loop for block across content
                  when (and (equal (alist-get 'type block) "tool_use")
                            (member (alist-get 'name block)
-                                   deterred-ai--file-tool-names))
+                                   deterred-ai--claude-file-tool-names))
                  do (let* ((input (alist-get 'input block))
                            (file-path (deterred-ai--json-value 'file_path input))
                            (tool-name (alist-get 'name block))
@@ -191,7 +198,7 @@ message.id for linking user records."
                                         (cons 'lines-added nil)
                                         (cons 'lines-removed nil))))))))))))
 
-(defun deterred-ai--parse-jsonl (jsonl-path)
+(defun deterred-ai--claude-parse-jsonl (jsonl-path)
   "Parse a Claude Code JSONL session file at JSONL-PATH.
 
 Returns a list of alists, one per unique assistant message, with
@@ -212,7 +219,7 @@ token usage and file modification data."
                     (type (alist-get 'type record)))
           (cond
            ((equal type "assistant")
-            (deterred-ai--process-assistant-record
+            (deterred-ai--claude-process-assistant-record
              record messages uuid-to-msg-id))
            ((equal type "user")
             (when-let* ((tool-result (alist-get 'toolUseResult record))
@@ -268,34 +275,35 @@ token usage and file modification data."
        messages)
       (seq-sort-by (lambda (e) (alist-get 'timestamp e)) #'< result))))
 
-(defun deterred-ai--collect-jsonl-files (projects-dir)
+(defun deterred-ai--claude-collect-jsonl-files (projects-dir)
   "Collect all JSONL files from PROJECTS-DIR.
 
 Returns a list of alists with keys `jsonl-path' and `project-dir'."
   (let (result)
-    (dolist (project-dir (directory-files projects-dir t "\\`[^.]"))
-      (when (file-directory-p project-dir)
-        (dolist (entry (directory-files project-dir t))
-          (let ((name (file-name-nondirectory entry)))
-            (cond
-             ;; Main session file: <session-id>.jsonl
-             ((string-suffix-p ".jsonl" name)
-              (push (list (cons 'jsonl-path entry)
-                          (cons 'project-dir
-                                (file-name-nondirectory project-dir)))
-                    result))
-             ;; Session directory with subagents
-             ((file-directory-p entry)
-              (let ((subagents-dir (expand-file-name "subagents" entry)))
-                (when (file-directory-p subagents-dir)
-                  (dolist (sa (directory-files subagents-dir t "\\.jsonl\\'"))
-                    (push (list (cons 'jsonl-path sa)
-                                (cons 'project-dir
-                                      (file-name-nondirectory project-dir)))
-                          result))))))))))
+    (when (file-directory-p projects-dir)
+      (dolist (project-dir (directory-files projects-dir t "\\`[^.]"))
+        (when (file-directory-p project-dir)
+          (dolist (entry (directory-files project-dir t))
+            (let ((name (file-name-nondirectory entry)))
+              (cond
+               ;; Main session file: <session-id>.jsonl
+               ((string-suffix-p ".jsonl" name)
+                (push (list (cons 'jsonl-path entry)
+                            (cons 'project-dir
+                                  (file-name-nondirectory project-dir)))
+                      result))
+               ;; Session directory with subagents
+               ((file-directory-p entry)
+                (let ((subagents-dir (expand-file-name "subagents" entry)))
+                  (when (file-directory-p subagents-dir)
+                    (dolist (sa (directory-files subagents-dir t "\\.jsonl\\'"))
+                      (push (list (cons 'jsonl-path sa)
+                                  (cons 'project-dir
+                                        (file-name-nondirectory project-dir)))
+                            result)))))))))))
     (nreverse result)))
 
-(defun deterred-ai--parse-all ()
+(defun deterred-ai--claude-parse-all ()
   "Parse all Claude Code JSONL session files.
 
 Scans `deterred-ai-claude-data-dir'/projects/ for all JSONL files
@@ -303,18 +311,223 @@ including subagent sessions.
 
 Returns a list of alists sorted by timestamp."
   (let* ((projects-dir (expand-file-name "projects" deterred-ai-claude-data-dir))
-         (files (deterred-ai--collect-jsonl-files projects-dir))
+         (files (deterred-ai--claude-collect-jsonl-files projects-dir))
          result)
     (dolist (file-info files)
       (let ((jsonl-path (alist-get 'jsonl-path file-info))
             (project-dir (alist-get 'project-dir file-info)))
         (condition-case err
-            (dolist (entry (deterred-ai--parse-jsonl jsonl-path))
+            (dolist (entry (deterred-ai--claude-parse-jsonl jsonl-path))
               (push (cons (cons 'project-dir project-dir) entry) result))
           (error
            (message "deterred-ai: error parsing %s: %s" jsonl-path err)))))
     (seq-sort-by (lambda (e) (alist-get 'timestamp e)) #'< result)))
 
+(defun deterred-ai--codex-non-empty-string (value)
+  "Return VALUE when it is a non-empty string, otherwise nil."
+  (when (stringp value)
+    (let ((trimmed (string-trim value)))
+      (unless (string-empty-p trimmed)
+        trimmed))))
+
+(defun deterred-ai--codex-normalize-usage (usage)
+  "Normalize raw Codex token USAGE alist."
+  (when (consp usage)
+    (let* ((input (or (deterred-ai--json-value 'input_tokens usage) 0))
+           (cached (or (deterred-ai--json-value 'cached_input_tokens usage)
+                       (deterred-ai--json-value 'cache_read_input_tokens usage)
+                       0))
+           (output (or (deterred-ai--json-value 'output_tokens usage) 0))
+           (reasoning (or (deterred-ai--json-value 'reasoning_output_tokens usage) 0))
+           (total (or (deterred-ai--json-value 'total_tokens usage)
+                      (+ input output))))
+      (list
+       (cons 'input_tokens input)
+       (cons 'cached_input_tokens cached)
+       (cons 'output_tokens output)
+       (cons 'reasoning_output_tokens reasoning)
+       (cons 'total_tokens total)))))
+
+(defun deterred-ai--codex-subtract-usage (current previous)
+  "Build usage delta from CURRENT cumulative usage and PREVIOUS usage."
+  (list
+   (cons 'input_tokens
+         (max (- (or (alist-get 'input_tokens current) 0)
+                 (or (alist-get 'input_tokens previous) 0))
+              0))
+   (cons 'cached_input_tokens
+         (max (- (or (alist-get 'cached_input_tokens current) 0)
+                 (or (alist-get 'cached_input_tokens previous) 0))
+              0))
+   (cons 'output_tokens
+         (max (- (or (alist-get 'output_tokens current) 0)
+                 (or (alist-get 'output_tokens previous) 0))
+              0))
+   (cons 'reasoning_output_tokens
+         (max (- (or (alist-get 'reasoning_output_tokens current) 0)
+                 (or (alist-get 'reasoning_output_tokens previous) 0))
+              0))
+   (cons 'total_tokens
+         (max (- (or (alist-get 'total_tokens current) 0)
+                 (or (alist-get 'total_tokens previous) 0))
+              0))))
+
+(defun deterred-ai--codex-extract-model (payload)
+  "Extract model name from Codex PAYLOAD alist."
+  (when (consp payload)
+    (or (deterred-ai--codex-non-empty-string
+         (deterred-ai--json-value 'model payload))
+        (when-let* ((info (alist-get 'info payload))
+                    (_ (consp info)))
+          (or (deterred-ai--codex-non-empty-string
+               (deterred-ai--json-value 'model info))
+              (deterred-ai--codex-non-empty-string
+               (deterred-ai--json-value 'model_name info))
+              (when-let* ((metadata (alist-get 'metadata info))
+                          (_ (consp metadata)))
+                (deterred-ai--codex-non-empty-string
+                 (deterred-ai--json-value 'model metadata)))))
+        (when-let* ((metadata (alist-get 'metadata payload))
+                    (_ (consp metadata)))
+          (deterred-ai--codex-non-empty-string
+           (deterred-ai--json-value 'model metadata))))))
+
+(defun deterred-ai--codex-build-message-id (session-id timestamp line-no)
+  "Build deterministic Codex message ID from SESSION-ID, TIMESTAMP and LINE-NO."
+  (format "codex:%s:%s:%d" session-id timestamp line-no))
+
+(defun deterred-ai--codex-parse-jsonl (jsonl-path sessions-dir)
+  "Parse a Codex JSONL file at JSONL-PATH under SESSIONS-DIR."
+  (let* ((relative-path (file-relative-name jsonl-path sessions-dir))
+         (session-id (string-remove-suffix ".jsonl" relative-path))
+         (result nil)
+         (current-model nil)
+         (current-cwd nil)
+         (session-version nil)
+         (previous-totals nil)
+         (line-no 0))
+    (with-temp-buffer
+      (insert-file-contents jsonl-path)
+      (goto-char (point-min))
+      (while (not (eobp))
+        (cl-incf line-no)
+        (when-let* ((line (buffer-substring-no-properties
+                           (line-beginning-position) (line-end-position)))
+                    (record (condition-case nil
+                                (json-read-from-string line)
+                              (error nil)))
+                    (type (alist-get 'type record)))
+          (cond
+           ((equal type "session_meta")
+            (when-let* ((payload (alist-get 'payload record))
+                        (_ (consp payload)))
+              (when-let* ((cwd (deterred-ai--codex-non-empty-string
+                                (deterred-ai--json-value 'cwd payload))))
+                (setq current-cwd cwd))
+              (when-let* ((cli-version (deterred-ai--codex-non-empty-string
+                                        (deterred-ai--json-value 'cli_version payload))))
+                (setq session-version cli-version))
+              (when-let* ((model (deterred-ai--codex-extract-model payload)))
+                (setq current-model model))))
+           ((equal type "turn_context")
+            (when-let* ((payload (alist-get 'payload record))
+                        (_ (consp payload)))
+              (when-let* ((cwd (deterred-ai--codex-non-empty-string
+                                (deterred-ai--json-value 'cwd payload))))
+                (setq current-cwd cwd))
+              (when-let* ((model (deterred-ai--codex-extract-model payload)))
+                (setq current-model model))))
+           ((equal type "event_msg")
+            (when-let* ((payload (alist-get 'payload record))
+                        (_ (consp payload))
+                        (payload-type (deterred-ai--json-value 'type payload))
+                        (_ (equal payload-type "token_count"))
+                        (timestamp-str (deterred-ai--json-value 'timestamp record))
+                        (_ (stringp timestamp-str))
+                        (timestamp (condition-case nil
+                                       (truncate
+                                        (float-time
+                                         (encode-time
+                                          (iso8601-parse timestamp-str))))
+                                     (error nil))))
+              (let* ((info (alist-get 'info payload))
+                     (last-usage
+                      (deterred-ai--codex-normalize-usage
+                       (and (consp info)
+                            (alist-get 'last_token_usage info))))
+                     (total-usage
+                      (deterred-ai--codex-normalize-usage
+                       (and (consp info)
+                            (alist-get 'total_token_usage info))))
+                     (raw-usage
+                      (or last-usage
+                          (and total-usage
+                               (deterred-ai--codex-subtract-usage
+                                total-usage previous-totals)))))
+                (when total-usage
+                  (setq previous-totals total-usage))
+                (when raw-usage
+                  (let* ((input (or (alist-get 'input_tokens raw-usage) 0))
+                         (cached (or (alist-get 'cached_input_tokens raw-usage) 0))
+                         (output (or (alist-get 'output_tokens raw-usage) 0))
+                         (reasoning (or (alist-get 'reasoning_output_tokens raw-usage) 0))
+                         (total (or (alist-get 'total_tokens raw-usage) 0)))
+                    (unless (and (zerop input)
+                                 (zerop cached)
+                                 (zerop output)
+                                 (zerop reasoning)
+                                 (zerop total))
+                      (when-let* ((model (deterred-ai--codex-extract-model payload)))
+                        (setq current-model model))
+                      (let ((model-name (or current-model "unknown-codex")))
+                        (push
+                         (list
+                          (cons 'timestamp timestamp)
+                          (cons 'session-id session-id)
+                          (cons 'model-name model-name)
+                          (cons 'message-id
+                                (deterred-ai--codex-build-message-id
+                                 session-id timestamp-str line-no))
+                          (cons 'request-id nil)
+                          (cons 'cwd current-cwd)
+                          (cons 'version session-version)
+                          (cons 'input-tokens input)
+                          (cons 'output-tokens output)
+                          (cons 'cache-creation-input-tokens 0)
+                          (cons 'cache-read-input-tokens (min cached input))
+                          (cons 'total-tokens total)
+                          (cons 'files nil))
+                         result))))))))))
+        (forward-line 1)))
+    (nreverse result)))
+
+(defun deterred-ai--codex-collect-jsonl-files (sessions-dir)
+  "Collect all Codex JSONL files in SESSIONS-DIR."
+  (if (file-directory-p sessions-dir)
+      (directory-files-recursively sessions-dir "\\.jsonl\\'")
+    nil))
+
+(defun deterred-ai--codex-parse-all ()
+  "Parse all Codex JSONL session files."
+  (let* ((sessions-dir (expand-file-name "sessions" deterred-ai-codex-data-dir))
+         (files (deterred-ai--codex-collect-jsonl-files sessions-dir))
+         result)
+    (dolist (jsonl-path files)
+      (condition-case err
+          (setq result
+                (append result
+                        (deterred-ai--codex-parse-jsonl jsonl-path sessions-dir)))
+        (error
+         (message "deterred-ai: error parsing %s: %s" jsonl-path err))))
+    (seq-sort-by (lambda (e) (alist-get 'timestamp e)) #'< result)))
+
+(defun deterred-ai--parse-all ()
+  "Parse all configured AI usage JSONL files."
+  (seq-sort-by
+   (lambda (e) (alist-get 'timestamp e))
+   #'<
+   (append (deterred-ai--claude-parse-all)
+           (deterred-ai--codex-parse-all))))
 
 (defun deterred-ai--tiered-cost (tokens base-price tiered-price)
   "Calculate cost for TOKENS with BASE-PRICE and optional TIERED-PRICE.
@@ -479,7 +692,7 @@ DO NOTHING on conflict.  Never deletes existing data."
              (length item-values) (length file-values))))
 
 (defun deterred-ai-load (&optional callback)
-  "Load AI usage data from Claude Code JSONL files into DETERRED.
+  "Load AI usage data from Claude Code and Codex JSONL files into DETERRED.
 
 If CALLBACK is non-nil, call it when done."
   (interactive)
@@ -489,7 +702,29 @@ If CALLBACK is non-nil, call it when done."
        (deterred-ai--store entries)
        (when callback (funcall callback))))))
 
-(defun deterred-ai--parse-stats (stats-path)
+(defun deterred-ai-load-claude (&optional callback)
+  "Load AI usage data from Claude Code JSONL files into DETERRED.
+
+If CALLBACK is non-nil, call it when done."
+  (interactive)
+  (deterred-ai--ensure-pricing
+   (lambda ()
+     (let ((entries (deterred-ai--postprocess (deterred-ai--claude-parse-all))))
+       (deterred-ai--store entries)
+       (when callback (funcall callback))))))
+
+(defun deterred-ai-load-codex (&optional callback)
+  "Load AI usage data from Codex JSONL files into DETERRED.
+
+If CALLBACK is non-nil, call it when done."
+  (interactive)
+  (deterred-ai--ensure-pricing
+   (lambda ()
+     (let ((entries (deterred-ai--postprocess (deterred-ai--codex-parse-all))))
+       (deterred-ai--store entries)
+       (when callback (funcall callback))))))
+
+(defun deterred-ai--claude-parse-stats (stats-path)
   "Parse a Claude Code stats-cache JSON file at STATS-PATH.
 
 Returns a list of fake entry alists, one per estimated message.
@@ -598,7 +833,7 @@ per-model token totals, and `modelUsage' for token-type ratios."
                  result))))))
     (nreverse result)))
 
-(defun deterred-ai--store-stats (entries)
+(defun deterred-ai--claude-store-stats (entries)
   "Store fake stats ENTRIES, skipping dates with real data.
 
 Queries the database for dates that already have is_stats = 0
@@ -657,7 +892,7 @@ FROM ai_usage_item WHERE is_stats = 0")))
              (- (length entries) (length filtered))
              (length item-values))))
 
-(defun deterred-ai-load-stats ()
+(defun deterred-ai--claude-load-stats ()
   "Load AI usage data from a Claude Code stats-cache JSON file.
 
 Prompts for the file path, parses it, and stores fake entries for
@@ -671,25 +906,27 @@ dates that have no real JSONL data."
                      t)))
     (deterred-ai--ensure-pricing
      (lambda ()
-       (let ((entries (deterred-ai--parse-stats stats-path)))
-         (deterred-ai--store-stats entries))))))
+       (let ((entries (deterred-ai--claude-parse-stats stats-path)))
+         (deterred-ai--claude-store-stats entries))))))
 
 ;;;###autoload
 (defclass deterred-ai-usage (deterred-source)
   ((name :initform "AI Usage")
    (warn-days :initform 1))
-  "DETERRED source for AI usage data (Claude Code).")
+  "DETERRED source for AI usage data (Claude Code and Codex).")
 
 (cl-defmethod deterred-source-actions ((_source deterred-ai-usage) &optional callback)
   "Run an action for the AI usage source.
 
 Run CALLBACK when done."
   (deterred-source--actions-pick
-   '(("Load stats cache JSON" deterred-ai-load-stats nil))
+   '(("Load Claude JSONL" deterred-ai-load-claude nil)
+     ("Load Codex JSONL" deterred-ai-load-codex nil)
+     ("Load Claude stats cache JSON" deterred-ai--claude-load-stats nil))
    callback))
 
 (cl-defmethod deterred-source-sync ((_source deterred-ai-usage) &optional callback)
-  "Sync AI usage data from Claude Code JSONL files.
+  "Sync AI usage data from Claude Code and Codex JSONL files.
 
 Call CALLBACK when done."
   (deterred-ai-load callback))
