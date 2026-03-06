@@ -33,6 +33,7 @@
 (require 'request)
 (require 'iso8601)
 (require 'subr-x)
+(require 'cl-lib)
 
 (defconst deterred-ai--pricing-litellm-url
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json")
@@ -467,8 +468,11 @@ Returns a list of alists sorted by timestamp."
                 (when total-usage
                   (setq previous-totals total-usage))
                 (when raw-usage
-                  (let* ((input (or (alist-get 'input_tokens raw-usage) 0))
-                         (cached (or (alist-get 'cached_input_tokens raw-usage) 0))
+                  (let* ((raw-input (or (alist-get 'input_tokens raw-usage) 0))
+                         ;; Codex reports cached tokens as a subset of input tokens.
+                         (cached (min (or (alist-get 'cached_input_tokens raw-usage) 0)
+                                      raw-input))
+                         (input (max (- raw-input cached) 0))
                          (output (or (alist-get 'output_tokens raw-usage) 0))
                          (reasoning (or (alist-get 'reasoning_output_tokens raw-usage) 0))
                          (total (or (alist-get 'total_tokens raw-usage) 0)))
@@ -494,7 +498,7 @@ Returns a list of alists sorted by timestamp."
                           (cons 'input-tokens input)
                           (cons 'output-tokens output)
                           (cons 'cache-creation-input-tokens 0)
-                          (cons 'cache-read-input-tokens (min cached input))
+                          (cons 'cache-read-input-tokens cached)
                           (cons 'total-tokens total)
                           (cons 'files nil))
                          result))))))))))
@@ -638,11 +642,11 @@ files.  `deterred-ai--ensure-pricing' must be called before this."
    ((>= n 1000) (format "%.1fk" (/ n 1000.0)))
    (t (number-to-string n))))
 
-(defun deterred-ai--store (entries)
+(cl-defun deterred-ai--store (entries &key (conflict-action 'do-nothing))
   "Store parsed and postprocessed ENTRIES into the database.
 
-Converts entry alists to DB-compatible format and inserts with
-DO NOTHING on conflict.  Never deletes existing data."
+Converts entry alists to DB-compatible format and inserts them using
+CONFLICT-ACTION.  Never deletes existing data."
   (let ((db (deterred-db--init))
         item-values
         file-values)
@@ -678,13 +682,13 @@ DO NOTHING on conflict.  Never deletes existing data."
         (deterred-db-insert-unsafe
          db :table-name 'ai_usage_item
          :values item-values
-         :conflict-action 'do-nothing
+         :conflict-action conflict-action
          :conflict-attrs '(message_id))
         (when file-values
           (deterred-db-insert-unsafe
            db :table-name 'ai_usage_file
            :values file-values
-           :conflict-action 'do-nothing
+           :conflict-action conflict-action
            :conflict-attrs '(message_id file_path)))
         (deterred-db-mark-updated db 'ai_usage_item)
         (deterred-db-mark-updated db 'ai_usage_file)))
@@ -722,6 +726,61 @@ If CALLBACK is non-nil, call it when done."
    (lambda ()
      (let ((entries (deterred-ai--postprocess (deterred-ai--codex-parse-all))))
        (deterred-ai--store entries)
+       (when callback (funcall callback))))))
+
+(defconst deterred-ai--pricing-recalc-batch-size 500
+  "Batch size for recalculating stored AI pricing.")
+
+(defun deterred-ai--recalculate-stored-pricing ()
+  "Recalculate stored USD pricing for all AI usage rows."
+  (let* ((db (deterred-db--init))
+         (rows (deterred-db-select-alist
+                db "SELECT message_id,
+                           model_name,
+                           input_tokens,
+                           output_tokens,
+                           cache_creation_input_tokens,
+                           cache_read_input_tokens
+                    FROM ai_usage_item"))
+         (total (length rows))
+         (batch-size deterred-ai--pricing-recalc-batch-size)
+         (offset 0))
+    (while (< offset total)
+      (let ((batch (seq-subseq rows offset (min total (+ offset batch-size)))))
+        (with-sqlite-transaction db
+          (dolist (row batch)
+            (let ((entry
+                   (list
+                    (cons 'model-name (alist-get 'model_name row))
+                    (cons 'input-tokens (alist-get 'input_tokens row))
+                    (cons 'output-tokens (alist-get 'output_tokens row))
+                    (cons 'cache-creation-input-tokens
+                          (alist-get 'cache_creation_input_tokens row))
+                    (cons 'cache-read-input-tokens
+                          (alist-get 'cache_read_input_tokens row)))))
+              (deterred-db-execute-trace
+               db
+               "UPDATE ai_usage_item
+                SET usd_cost = ?
+                WHERE message_id = ?"
+               (list (round (* (deterred-ai--calculate-cost entry) 1000000))
+                     (alist-get 'message_id row)))))))
+      (setq offset (+ offset batch-size)))
+    (deterred-db-mark-updated db 'ai_usage_item)
+    (message "deterred-ai: recalculated pricing for %d items" total)))
+
+(defun deterred-ai-recalculate-pricing (&optional callback)
+  "Recalculate AI usage pricing and repair stored Codex token buckets.
+
+This reparses real Claude Code and Codex JSONL data with the current
+logic, updates matching stored rows, and then recalculates USD cost for
+all stored AI usage entries."
+  (interactive)
+  (deterred-ai--ensure-pricing
+   (lambda ()
+     (let ((entries (deterred-ai--postprocess (deterred-ai--parse-all))))
+       (deterred-ai--store entries :conflict-action 'do-update)
+       (deterred-ai--recalculate-stored-pricing)
        (when callback (funcall callback))))))
 
 (defun deterred-ai--claude-parse-stats (stats-path)
@@ -833,12 +892,13 @@ per-model token totals, and `modelUsage' for token-type ratios."
                  result))))))
     (nreverse result)))
 
-(defun deterred-ai--claude-store-stats (entries)
+(cl-defun deterred-ai--claude-store-stats
+    (entries &key (conflict-action 'do-nothing))
   "Store fake stats ENTRIES, skipping dates with real data.
 
 Queries the database for dates that already have is_stats = 0
 entries, filters ENTRIES to exclude those dates, calculates cost,
-and inserts with is_stats = 1."
+and inserts with is_stats = 1 using CONFLICT-ACTION."
   (let* ((db (deterred-db--init))
          (real-dates
           (mapcar (lambda (row) (alist-get 'day row))
@@ -884,7 +944,7 @@ FROM ai_usage_item WHERE is_stats = 0")))
         (deterred-db-insert-unsafe
          db :table-name 'ai_usage_item
          :values item-values
-         :conflict-action 'do-nothing
+         :conflict-action conflict-action
          :conflict-attrs '(message_id))
         (deterred-db-mark-updated db 'ai_usage_item)))
     (message "deterred-ai: stats: %d entries parsed, %d skipped (real data), %d stored"
@@ -922,6 +982,7 @@ Run CALLBACK when done."
   (deterred-source--actions-pick
    '(("Load Claude JSONL" deterred-ai-load-claude nil)
      ("Load Codex JSONL" deterred-ai-load-codex nil)
+     ("Recalculate pricing" deterred-ai-recalculate-pricing nil)
      ("Load Claude stats cache JSON" deterred-ai--claude-load-stats nil))
    callback))
 
