@@ -34,6 +34,7 @@
 (require 'deterred-db)
 (require 'deterred-source)
 (require 'deterred-utils)
+(require 'deterred-messengers-telega-export)
 
 ;; Telega functions (optional dependency)
 (declare-function telega-user-get "telega-user")
