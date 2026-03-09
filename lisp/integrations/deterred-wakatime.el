@@ -66,14 +66,72 @@
   :type 'string)
 
 (defcustom deterred-wakatime-api-range 7
-  "How many days in the past to include in API export."
+  "How many days in the past to include in API export.
+
+If nil, infer the number of missing days from local data and download
+that many days plus one overlap day."
   :group 'deterred-sources
-  :type 'number)
+  :type '(choice
+          (const :tag "Auto infer from local data" nil)
+          (number :tag "Fixed number of days")))
+
+(defcustom deterred-wakatime-wakapi-compatibility-mode nil
+  "Whether to adapt summary parsing for Wakapi compatibility API.
+
+When non-nil, summary date extraction prefers `range.start' because
+Wakapi currently does not always provide stable daily values in
+`range.date'."
+  :group 'deterred-sources
+  :type 'boolean)
 
 (defcustom deterred-wakatime-process-project-name #'identity
   "A function to process project name."
   :group 'deterred-sources
   :type 'function)
+
+(defun deterred-wakatime--api-normalize-date-string (value)
+  "Normalize VALUE to YYYY-MM-DD."
+  (when (stringp value)
+    (if (string-match-p (rx bos (= 4 digit) "-" (= 2 digit) "-" (= 2 digit)) value)
+        (substring value 0 10)
+      (condition-case nil
+          (format-time-string "%Y-%m-%d" (iso8601-parse value))
+        (error nil)))))
+
+(defun deterred-wakatime--api-date-string (day-in-project)
+  "Extract YYYY-MM-DD date string from DAY-IN-PROJECT summary item."
+  (let* ((range (alist-get 'range day-in-project))
+         (preferred (if deterred-wakatime-wakapi-compatibility-mode
+                        (or (alist-get 'start range)
+                            (alist-get 'date range))
+                      (or (alist-get 'date range)
+                          (alist-get 'start range))))
+         (date-string (deterred-wakatime--api-normalize-date-string preferred)))
+    (unless date-string
+      (error "Unable to derive date from summary range: %S" range))
+    date-string))
+
+(defun deterred-wakatime--api-compute-range-days (&optional db)
+  "Compute range days for API sync.
+
+If `deterred-wakatime-api-range' is non-nil, return it.
+If it is nil, infer missing days from the latest local WakaTime entry
+and add one overlap day."
+  (if deterred-wakatime-api-range
+      deterred-wakatime-api-range
+    (let* ((db (or db (deterred-db--init)))
+           (latest-ts
+            (condition-case nil
+                (caar (sqlite-select db "SELECT MAX(timestamp) FROM wakatime_entities"))
+              (error nil)))
+           (missing-days
+            (if latest-ts
+                (max 0
+                     (- (time-to-days (current-time))
+                        (time-to-days (seconds-to-time latest-ts))))
+              ;; Initial sync without prior data.
+              7)))
+      (1+ missing-days))))
 
 (defun deterred-wakatime--process-project (day-in-project db)
   "Get project ID from DAY-IN-PROJECT.
@@ -308,16 +366,19 @@ WHERE rn = 1")))
         (list "wakatime_projects")
         nil)))))
 
-(defun deterred-wakatime--api-get-summary (callback &optional project-name)
+(defun deterred-wakatime--api-get-summary
+    (callback &optional project-name range-days)
   "Invoke WakaTime's summary endpoint.  Feed the results into CALLBACK.
 
-If PROJECT-NAME is non-nil, filter by it."
-  (let ((params `(("api_key" . ,deterred-wakatime-api-key)
-                  ("end" . ,(format-time-string "%Y-%m-%d"))
-                  ("start" . ,(format-time-string
-                               "%Y-%m-%d"
-                               (- (time-convert nil 'integer)
-                                  (* 60 60 24 deterred-wakatime-api-range)))))))
+If PROJECT-NAME is non-nil, filter by it.
+If RANGE-DAYS is non-nil, use it as the lookback window."
+  (let* ((range-days (or range-days (deterred-wakatime--api-compute-range-days)))
+         (params `(("api_key" . ,deterred-wakatime-api-key)
+                   ("end" . ,(format-time-string "%Y-%m-%d"))
+                   ("start" . ,(format-time-string
+                                "%Y-%m-%d"
+                                (- (time-convert nil 'integer)
+                                   (* 60 60 24 range-days)))))))
     (when project-name
       (setf (alist-get "project" params nil nil #'equal)
             project-name))
@@ -331,13 +392,14 @@ If PROJECT-NAME is non-nil, filter by it."
       :error #'deterred-utils-on-request-error)))
 
 (defun deterred-wakatime--api-get-summary-recursive
-    (project-names callback &optional data)
+    (project-names callback &optional data range-days)
   "Invoke Wakatime's summary endpoint for all PROJECT-NAMES.
 
 Call CALLBACK with an alist with project names as keys and responses
 as values.
 
-DATA is the recursive parameter."
+DATA is the recursive parameter.
+RANGE-DAYS is the API lookback window."
   (if (seq-empty-p project-names)
       (funcall callback data)
     (message "Fetching %s..." (car project-names))
@@ -346,8 +408,9 @@ DATA is the recursive parameter."
        (push (cons (car project-names) project-data)
              data)
        (deterred-wakatime--api-get-summary-recursive
-        (cdr project-names) callback data))
-     (car project-names))))
+        (cdr project-names) callback data range-days))
+     (car project-names)
+     range-days)))
 
 (defun deterred-wakatime-api-load (&optional callback)
   "Load data from the WakaTime API into DETERRED.
@@ -363,45 +426,52 @@ days, so either you run this at least every 14 days or use
 If you are, you probably can set `deterred-wakatime-api-range' to some
 large value and download everything, but I haven't tried this."
   (interactive)
-  (deterred-wakatime--api-get-summary
-   (lambda (data)
-     (let ((project-names (thread-last
-                            (alist-get 'data data)
-                            (mapcar (lambda (day)
-                                      (mapcar
-                                       (lambda (project) (alist-get 'name project))
-                                       (alist-get 'projects day))))
-                            (flatten-list)
-                            (seq-uniq))))
-       (message "Fetched %s projects from WakaTime"
-                (seq-length project-names))
-       (deterred-wakatime--api-get-summary-recursive
-        project-names
-        (lambda (all-projects-data)
-          (let ((db (deterred-db--init)))
-            (with-sqlite-transaction db
-              (pcase-dolist (`(,project-name . ,project-data) all-projects-data)
-                (cl-mapc
-                 (lambda (day-in-project)
-                   (setf (alist-get 'name day-in-project)
-                         project-name)
-                   (deterred-wakatime--process-day-in-project
-                    db (alist-get 'date (alist-get 'range day-in-project))
-                    day-in-project))
-                 (alist-get 'data project-data)))
-              (deterred-wakatime--postprocess-entities db)
-              (deterred-wakatime--postprocess-projects db)
-              (deterred-db-mark-updated-batch
-               db
-               (append
-                (mapcar (lambda (f) (format "wakatime_%s" (car f)))
-                        deterred-wakatime-key-mappings)
-                (list "wakatime_projects")
-                nil))))
-          (if callback
-              (funcall callback)
-            (message "Done fetching %s projects from WakaTime"
-                     (seq-length project-names)))))))))
+  (let ((range-days (deterred-wakatime--api-compute-range-days)))
+    (message "Fetching WakaTime API data for %s day(s)" range-days)
+    (deterred-wakatime--api-get-summary
+     (lambda (data)
+       (let ((project-names (thread-last
+                              (alist-get 'data data)
+                              (mapcar (lambda (day)
+                                        (mapcar
+                                         (lambda (project)
+                                           (alist-get 'name project))
+                                         (alist-get 'projects day))))
+                              (flatten-list)
+                              (seq-uniq))))
+         (message "Fetched %s projects from WakaTime"
+                  (seq-length project-names))
+         (deterred-wakatime--api-get-summary-recursive
+          project-names
+          (lambda (all-projects-data)
+            (let ((db (deterred-db--init)))
+              (with-sqlite-transaction db
+                (pcase-dolist (`(,project-name . ,project-data) all-projects-data)
+                  (cl-mapc
+                   (lambda (day-in-project)
+                     (setf (alist-get 'name day-in-project) project-name)
+                     (deterred-wakatime--process-day-in-project
+                      db
+                      (deterred-wakatime--api-date-string day-in-project)
+                      day-in-project))
+                   (alist-get 'data project-data)))
+                (deterred-wakatime--postprocess-entities db)
+                (deterred-wakatime--postprocess-projects db)
+                (deterred-db-mark-updated-batch
+                 db
+                 (append
+                  (mapcar (lambda (f) (format "wakatime_%s" (car f)))
+                          deterred-wakatime-key-mappings)
+                  (list "wakatime_projects")
+                  nil))))
+            (if callback
+                (funcall callback)
+              (message "Done fetching %s projects from WakaTime"
+                       (seq-length project-names))))
+          nil
+          range-days)))
+     nil
+     range-days)))
 
 ;;;###autoload
 (defclass deterred-wakatime (deterred-source)
