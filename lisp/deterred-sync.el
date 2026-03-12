@@ -81,6 +81,7 @@
 ;;   buffer.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'deterred-db)
 (require 'deterred-utils)
 
@@ -138,7 +139,8 @@
     ;; `deterred-ai'
     (merge-hostname :table-name ai_usage_item)
     (merge-keys :table-name ai_usage_file
-                :key-attrs (message_id file_path)))
+                :key-attrs (message_id file_path))
+    (merge-hostname :table-name ai_accepted_completions))
   "The order of sync strategy application for DETERRED.
 
 This is a list.  In each element, the first item is a strategy name

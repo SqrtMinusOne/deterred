@@ -44,6 +44,7 @@
 ;; - `deterred-db-select-template-alist'.
 
 ;;; Code:
+(require 'cl-lib)
 (require 'seq)
 (require 'sqlite)
 

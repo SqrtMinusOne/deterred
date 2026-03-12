@@ -61,6 +61,9 @@
   :group 'deterred
   :type '(alist :key-type string :value-type string))
 
+(defconst deterred-ai-windsurf-copilot-provider "windsurf-copilot"
+  "Provider name used for Windsurf Copilot accepted completions.")
+
 (defconst deterred-ai--tiered-threshold 200000
   "Token threshold for tiered pricing (200k).")
 
@@ -589,7 +592,7 @@ called before this.  Returns cost as a float in dollars."
 
 Walks up directory components until a match is found."
   (when path
-    (let* ((parts (file-name-split path))
+    (let* ((parts (file-name-split (expand-file-name path)))
            (i (seq-length parts)))
       (cl-block search
         (while (> i 0)
@@ -598,12 +601,11 @@ Walks up directory components until a match is found."
             (cl-return-from search project-id))
           (setq i (1- i)))))))
 
-(defun deterred-ai--match-project-ids (entries)
-  "Match wakatime project IDs for ENTRIES.
+(defun deterred-ai--project-id-by-path (&optional db)
+  "Return a hash table mapping project roots to WakaTime project IDs.
 
-Queries the database for project roots and matches `cwd' and file
-paths against them.  Mutates ENTRIES in place."
-  (let* ((db (deterred-db--init))
+DB is the sqlite database object."
+  (let* ((db (or db (deterred-db--init)))
          (projects (deterred-db-select-alist
                     db "SELECT id, project_root FROM wakatime_projects
 WHERE project_root IS NOT NULL AND name != 'Unknown Project'"))
@@ -611,6 +613,14 @@ WHERE project_root IS NOT NULL AND name != 'Unknown Project'"))
     (dolist (item projects)
       (puthash (alist-get 'project_root item)
                (alist-get 'id item) id-by-path))
+    id-by-path))
+
+(defun deterred-ai--match-project-ids (entries)
+  "Match wakatime project IDs for ENTRIES.
+
+Queries the database for project roots and matches `cwd' and file
+paths against them.  Mutates ENTRIES in place."
+  (let ((id-by-path (deterred-ai--project-id-by-path)))
     (dolist (entry entries)
       (nconc entry
              (list (cons 'project-id
@@ -695,6 +705,98 @@ CONFLICT-ACTION.  Never deletes existing data."
     (message "deterred-ai: stored %d items, %d files"
              (length item-values) (length file-values))))
 
+(defun deterred-ai--backfill-table-project-ids
+    (db table-name path-attr id-by-path &optional extra-where)
+  "Backfill `project_id' in TABLE-NAME by matching PATH-ATTR to WakaTime roots.
+
+DB is the sqlite database object.  ID-BY-PATH is a hash table as
+returned by `deterred-ai--project-id-by-path'.  EXTRA-WHERE is
+appended to the WHERE clause."
+  (let* ((table-str (symbol-name table-name))
+         (path-str (symbol-name path-attr))
+         (path-key (intern path-str))
+         (rows (deterred-db-select-alist
+                db
+                (format "SELECT rowid AS row_id, %s
+                         FROM %s
+                         WHERE project_id IS NULL
+                           AND %s IS NOT NULL%s"
+                        path-str table-str path-str
+                        (if extra-where
+                            (concat "\n AND " extra-where)
+                          ""))))
+         (updated 0))
+    (dolist (row rows)
+      (when-let* ((project-id
+                   (deterred-ai--match-project-id
+                    (alist-get path-key row) id-by-path)))
+        (deterred-db-execute-trace
+         db
+         (format "UPDATE %s
+                  SET project_id = ?
+                  WHERE rowid = ?"
+                 table-str)
+         (list project-id (alist-get 'row_id row)))
+        (cl-incf updated)))
+    updated))
+
+(defun deterred-ai-backfill-project-ids (&optional callback)
+  "Backfill missing AI `project_id' values using `wakatime_projects'.
+
+This updates path-based AI tables, including accepted completions.
+If CALLBACK is non-nil, call it when done."
+  (interactive)
+  (let* ((db (deterred-db--init))
+         (id-by-path (deterred-ai--project-id-by-path db))
+         (item-updated 0)
+         (file-updated 0)
+         (completion-updated 0))
+    (with-sqlite-transaction db
+      (setq item-updated
+            (deterred-ai--backfill-table-project-ids
+             db 'ai_usage_item 'cwd id-by-path "is_stats = 0"))
+      (setq file-updated
+            (deterred-ai--backfill-table-project-ids
+             db 'ai_usage_file 'file_path id-by-path))
+      (setq completion-updated
+            (deterred-ai--backfill-table-project-ids
+             db 'ai_accepted_completions 'filename id-by-path))
+      (when (> item-updated 0)
+        (deterred-db-mark-updated db 'ai_usage_item))
+      (when (> file-updated 0)
+        (deterred-db-mark-updated db 'ai_usage_file))
+      (when (> completion-updated 0)
+        (deterred-db-mark-updated db 'ai_accepted_completions)))
+    (message
+     "deterred-ai: backfilled project IDs: %d items, %d files, %d completions"
+     item-updated file-updated completion-updated)
+    (when callback
+      (funcall callback))))
+
+;;;###autoload
+(defun deterred-ai-windsurf-copilot-accept-completion-hook (info)
+  "Store a Windsurf Copilot accepted completion from hook INFO."
+  (let* ((accepted (or (plist-get info :accepted) ""))
+         (buffer (plist-get info :buffer))
+         (filename (or (plist-get info :file)
+                       (when (buffer-live-p buffer)
+                         (buffer-file-name buffer)))))
+    (when filename
+      (let ((db (deterred-db--init))
+            (timestamp (time-convert nil 'integer)))
+        (sqlite-execute
+         db
+         "INSERT INTO ai_accepted_completions
+          (timestamp, hostname, filename, length, provider, project_id)
+          VALUES (?, ?, ?, ?, ?, ?)
+          ON CONFLICT (hostname, timestamp) DO NOTHING"
+         (list timestamp
+               (system-name)
+               (expand-file-name filename)
+               (length accepted)
+               deterred-ai-windsurf-copilot-provider
+               nil))))))
+
 (defun deterred-ai-load (&optional callback)
   "Load AI usage data from Claude Code and Codex JSONL files into DETERRED.
 
@@ -704,7 +806,7 @@ If CALLBACK is non-nil, call it when done."
    (lambda ()
      (let ((entries (deterred-ai--postprocess (deterred-ai--parse-all))))
        (deterred-ai--store entries)
-       (when callback (funcall callback))))))
+       (deterred-ai-backfill-project-ids callback)))))
 
 (defun deterred-ai-load-claude (&optional callback)
   "Load AI usage data from Claude Code JSONL files into DETERRED.
@@ -715,7 +817,7 @@ If CALLBACK is non-nil, call it when done."
    (lambda ()
      (let ((entries (deterred-ai--postprocess (deterred-ai--claude-parse-all))))
        (deterred-ai--store entries)
-       (when callback (funcall callback))))))
+       (deterred-ai-backfill-project-ids callback)))))
 
 (defun deterred-ai-load-codex (&optional callback)
   "Load AI usage data from Codex JSONL files into DETERRED.
@@ -726,7 +828,7 @@ If CALLBACK is non-nil, call it when done."
    (lambda ()
      (let ((entries (deterred-ai--postprocess (deterred-ai--codex-parse-all))))
        (deterred-ai--store entries)
-       (when callback (funcall callback))))))
+       (deterred-ai-backfill-project-ids callback)))))
 
 (defconst deterred-ai--pricing-recalc-batch-size 500
   "Batch size for recalculating stored AI pricing.")
@@ -983,6 +1085,7 @@ Run CALLBACK when done."
    '(("Load Claude JSONL" deterred-ai-load-claude nil)
      ("Load Codex JSONL" deterred-ai-load-codex nil)
      ("Recalculate pricing" deterred-ai-recalculate-pricing nil)
+     ("Backfill project IDs" deterred-ai-backfill-project-ids nil)
      ("Load Claude stats cache JSON" deterred-ai--claude-load-stats nil))
    callback))
 
