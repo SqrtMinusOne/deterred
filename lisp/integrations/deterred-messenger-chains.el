@@ -61,7 +61,21 @@ for personal chat chains that I started.  Default is 5 chars/sec."
   :group 'deterred)
 
 (defun deterred-messenger-chains--get-chat-messages (db chat-id)
-  "Fetch all messages for CHAT-ID from DB, ordered by timestamp."
+  "Fetch all messages for CHAT-ID from DB, ordered by timestamp.
+
+DB is a SQLite connection object.
+
+CHAT-ID is a messenger chat UUID string from the `messenger_chat'
+table.
+
+Return a list of message alists ordered by ascending `timestamp'.
+Each alist contains these keys:
+
+- id
+- sender_id
+- content
+- timestamp
+- is_attachment"
   (deterred-db-select-alist
    db
    "SELECT id, sender_id, content, timestamp, is_attachment
@@ -73,8 +87,28 @@ for personal chat chains that I started.  Default is 5 chars/sec."
 (defun deterred-messenger-chains--extract-raw-chains (messages gap)
   "Split MESSAGES into raw chains separated by gaps larger than GAP seconds.
 
-MESSAGES is a list of alists, already sorted by timestamp.
-Returns a list of chains, where each chain is a list of message alists."
+MESSAGES must be a list of message alists as returned by
+`deterred-messenger-chains--get-chat-messages', already sorted by
+ascending `timestamp'.
+
+GAP is an integer number of seconds.  Whenever the difference between
+two consecutive message timestamps is greater than GAP, a new chain is
+started.
+
+Return a list of raw chains.  Each raw chain is a list of the original
+message alists, preserving order.  The return shape is therefore:
+
+  ((MSG-1 MSG-2 ...)
+   (MSG-N ...))
+
+where each MSG is an alist from MESSAGES (as returned by
+`deterred-messenger-chains--get-chat-messages').  Return nil when
+MESSAGES is nil.
+
+These raw chains are temporary candidate conversation bursts.  Later
+processing applies personal-chat or group-chat heuristics to each raw
+chain separately before preserving the retained entries as distinct raw
+sequences."
   (when messages
     (let ((chains nil)
           (current-chain (list (car messages)))
@@ -90,19 +124,53 @@ Returns a list of chains, where each chain is a list of message alists."
       (push (nreverse current-chain) chains)
       (nreverse chains))))
 
-(defun deterred-messenger-chains--msgs-to-entries (messages chat-id adjusted-start)
-  "Convert MESSAGES to normalize entries with CHAT-ID.
+(defun deterred-messenger-chains--make-sequence-id (chat-id chain)
+  "Return a stable sequence id for raw CHAIN in CHAT-ID.
 
-ADJUSTED-START is the start time for the first entry.  The rest
-use their own timestamp.
+CHAT-ID is the chat UUID string.
 
-Each entry is (START END (CHAT-ID . (MSG-ID ...))).
-The first entry gets (ADJUSTED-START TIMESTAMP (CHAT-ID . (MSG-ID)))."
+CHAIN is a raw chain as returned by
+`deterred-messenger-chains--extract-raw-chains'."
+  (uuidgen-3
+   deterred-messengers-uuid-namespace
+   (concat "messenger-sequence:"
+           chat-id
+           ":"
+           (alist-get 'id (car chain)))))
+
+(defun deterred-messenger-chains--msgs-to-entries
+    (messages chat-id sequence-id adjusted-start)
+  "Convert MESSAGES to normalize entries with CHAT-ID and SEQUENCE-ID.
+
+MESSAGES is a non-empty list of message alists in ascending timestamp
+order, as produced by `deterred-messenger-chains--extract-raw-chains'.
+
+CHAT-ID is the chat UUID string shared by all messages in MESSAGES.
+SEQUENCE-ID is the UUID string of the raw chain from which MESSAGES was
+derived.
+
+ADJUSTED-START is an integer UNIX timestamp to use as the start of the
+first returned entry.  All later entries start at their own message
+timestamp.
+
+Return a list of normalized entries suitable for
+`deterred-utils-normalize-by-timeout'.  Each entry has the form:
+
+  (START END (CHAT-ID SEQUENCE-ID MSG-ID))
+
+where START and END are integer UNIX timestamps, CHAT-ID is the chat
+UUID string, SEQUENCE-ID is the raw-chain UUID string, and MSG-ID is
+the UUID string of the message represented by that entry.
+
+The first entry spans from ADJUSTED-START to the timestamp of the
+first message.  Every later entry initially has the form
+`(TIMESTAMP nil (CHAT-ID SEQUENCE-ID MSG-ID))', letting the
+normalization step fill in the effective end time."
   (let ((entries nil))
     (dolist (msg messages)
       (let ((ts (alist-get 'timestamp msg))
             (msg-id (alist-get 'id msg)))
-        (push (list ts nil (cons chat-id (list msg-id))) entries)))
+        (push (list ts nil (list chat-id sequence-id msg-id)) entries)))
     (setq entries (nreverse entries))
     ;; Adjust first entry's start
     (when entries
@@ -111,12 +179,26 @@ The first entry gets (ADJUSTED-START TIMESTAMP (CHAT-ID . (MSG-ID)))."
         (setf (nth 1 first-entry) (alist-get 'timestamp (car messages)))))
     entries))
 
-(defun deterred-messenger-chains--process-personal-chain (chain my-id chat-id)
+(defun deterred-messenger-chains--process-personal-chain
+    (chain my-id chat-id sequence-id)
   "Process a raw CHAIN under personal chat rules.
 
-MY-ID is the user's UUID.  CHAT-ID is the chat's UUID.
+CHAIN is one raw chain as returned by
+`deterred-messenger-chains--extract-raw-chains': a list of message
+alists from one personal chat, ordered by ascending timestamp.
 
-Returns a list of normalize entries, or nil if chain should be discarded."
+MY-ID is the user's UUID string.  CHAT-ID is the chat UUID string.
+SEQUENCE-ID is the UUID string assigned to CHAIN.
+
+If the first message in CHAIN is mine, keep the full chain and prepend
+estimated typing time before the first message.  If somebody else
+started the chain, keep only the part from
+`deterred-messenger-chains-lookback' seconds before my first message
+onward.
+
+Return a list of normalized entries in the format produced by
+`deterred-messenger-chains--msgs-to-entries', or nil when CHAIN
+contains no message sent by MY-ID."
   (let ((has-my-message (cl-some (lambda (msg)
                                    (equal (alist-get 'sender_id msg) my-id))
                                  chain)))
@@ -132,7 +214,8 @@ Returns a list of normalize entries, or nil if chain should be discarded."
                                                 deterred-messenger-chains-typing-speed))
                                   0))
                    (adjusted-start (- (alist-get 'timestamp first-msg) typing-time)))
-              (deterred-messenger-chains--msgs-to-entries chain chat-id adjusted-start))
+              (deterred-messenger-chains--msgs-to-entries
+               chain chat-id sequence-id adjusted-start))
           ;; Other started: filter to lookback before my first message
           (let* ((my-first-msg (cl-find-if
                                 (lambda (msg)
@@ -146,14 +229,26 @@ Returns a list of normalize entries, or nil if chain should be discarded."
                             chain)))
             (when filtered
               (deterred-messenger-chains--msgs-to-entries
-               filtered chat-id threshold))))))))
+               filtered chat-id sequence-id threshold))))))))
 
-(defun deterred-messenger-chains--process-group-chain (chain my-id chat-id)
+(defun deterred-messenger-chains--process-group-chain
+    (chain my-id chat-id sequence-id)
   "Process a raw CHAIN under group chat rules.
 
-MY-ID is the user's UUID.  CHAT-ID is the chat's UUID.
+CHAIN is one raw chain as returned by
+`deterred-messenger-chains--extract-raw-chains': a list of message
+alists from one group chat, ordered by ascending timestamp.
 
-Returns a list of normalize entries, or nil if chain should be discarded."
+MY-ID is the user's UUID string.  CHAT-ID is the chat UUID string.
+SEQUENCE-ID is the UUID string assigned to CHAIN.
+
+Keep only the part of CHAIN that starts
+`deterred-messenger-chains-lookback' seconds before my first message
+and ends at my last message in the chain.
+
+Return a list of normalized entries in the format produced by
+`deterred-messenger-chains--msgs-to-entries', or nil when CHAIN
+contains no message sent by MY-ID."
   (let ((my-messages (seq-filter
                       (lambda (msg)
                         (equal (alist-get 'sender_id msg) my-id))
@@ -170,15 +265,30 @@ Returns a list of normalize entries, or nil if chain should be discarded."
                         chain)))
         (when filtered
           (deterred-messenger-chains--msgs-to-entries
-           filtered chat-id threshold))))))
+           filtered chat-id sequence-id threshold))))))
 
 (defun deterred-messenger-chains--process-chat (db chat)
-  "Process one CHAT and return entries for intertwining.
+  "Process one CHAT and return raw-chain entries for intertwining.
 
-DB is the sqlite database object.  CHAT is an alist with keys
-`id' and `type'.
+CHAT is an alist selected from `messenger_chat' with at least:
+- id
+- type
 
-Returns a list of normalize entries (one per message)."
+DB is the SQLite connection object.
+
+Fetch all messages for CHAT, split them into raw per-chat chains, and
+apply either personal-chat or group-chat filtering rules.
+
+Each retained raw chain gets its own `sequence_id'.  The raw chain
+grouping is preserved in the return value so later normalization can
+trim overlap without losing the original per-conversation boundaries.
+
+Return a list of normalized-entry lists, one list per retained raw
+chain.  Each entry has the form:
+
+  (START END (CHAT-ID SEQUENCE-ID MSG-ID))
+
+Return nil when CHAT produces no retained raw chains."
   (let* ((chat-id (alist-get 'id chat))
          (chat-type (alist-get 'type chat))
          (messages (deterred-messenger-chains--get-chat-messages db chat-id))
@@ -187,19 +297,39 @@ Returns a list of normalize entries (one per message)."
                       deterred-messenger-chains-message-gap))
          (my-id deterred-messengers-my-id)
          (process-fn (if (equal chat-type "personal_chat")
-                         #'deterred-messenger-chains--process-personal-chain
+                       #'deterred-messenger-chains--process-personal-chain
                        #'deterred-messenger-chains--process-group-chain))
          result)
     (dolist (chain raw-chains)
-      (when-let* ((entries (funcall process-fn chain my-id chat-id)))
-        (setq result (nconc result entries))))
-    result))
+      (let ((sequence-id (deterred-messenger-chains--make-sequence-id
+                          chat-id chain)))
+        (when-let* ((entries (funcall process-fn
+                                      chain my-id chat-id sequence-id)))
+          (push entries result))))
+    (nreverse result)))
 
 (defun deterred-messenger-chains--save (db all-chains)
   "Delete existing chains and save ALL-CHAINS to DB.
 
-ALL-CHAINS is the output of `deterred-utils-normalize-by-timeout':
-a list of chains, each being a list of (START END (CHAT-ID . MSG-IDS))."
+DB is the SQLite connection object.
+
+ALL-CHAINS must be the output of
+`deterred-utils-normalize-by-timeout'.  Its shape is:
+
+  (((START END (CHAT-ID SEQUENCE-ID MSG-ID ...))
+    ...)
+   ...)
+
+Each outer list element corresponds to one raw conversation sequence
+after normalization.  Each inner entry describes a contiguous interval
+assigned to one chat, where START and END are integer UNIX timestamps,
+CHAT-ID is a chat UUID string, SEQUENCE-ID identifies the original raw
+chain, and MSG-ID values are the UUID strings of messages covered by
+that interval.
+
+This function clears existing `messenger_message_chain' rows, inserts
+new chain records, and updates `messenger_message.chain_id' for the
+messages referenced by ALL-CHAINS."
   ;; Clear existing
   (message "Clearing existing chain assignments...")
   (sqlite-execute db "UPDATE messenger_message SET chain_id = NULL")
@@ -213,12 +343,14 @@ a list of chains, each being a list of (START END (CHAT-ID . MSG-IDS))."
         (let* ((start (nth 0 entry))
                (end (nth 1 entry))
                (data (nth 2 entry))
-               (chat-id (car data))
-               (msg-ids (cdr data))
+               (chat-id (nth 0 data))
+               (sequence-id (nth 1 data))
+               (msg-ids (cddr data))
                (id (uuidgen-3 deterred-messengers-uuid-namespace
-                              (concat chat-id (number-to-string start)))))
+                              (concat sequence-id (number-to-string start)))))
           (push `((id . ,id)
                   (chat_id . ,chat-id)
+                  (sequence_id . ,sequence-id)
                   (timestamp_start . ,start)
                   (timestamp_end . ,end))
                 chain-values)
@@ -250,30 +382,57 @@ a list of chains, each being a list of (START END (CHAT-ID . MSG-IDS))."
 (defun deterred-messenger-chains-compute (&optional db)
   "Compute messenger chains and store them in DB.
 
-Fetches all chats, extracts chains per chat (applying personal/group
-rules), intertwines them across chats, and saves results."
+DB is an optional SQLite connection object.  When nil, initialize one
+with `deterred-db--init'.
+
+Fetch all chats from `messenger_chat', derive raw per-chat chains from
+their messages, apply personal-chat or group-chat filtering rules, and
+then pass the resulting normalized entries to
+`deterred-utils-normalize-by-timeout' to remove overlap across chats.
+
+The raw chains are preserved as separate sequences.  Each raw chain
+gets its own `sequence_id', and normalization trims overlap while
+keeping those sequence boundaries intact.
+
+The normalization input is a list shaped like:
+
+  (((START END (CHAT-ID SEQUENCE-ID MSG-ID)) ...)
+   ...)
+
+and the normalized result is a list of normalized raw sequences shaped
+like:
+
+  (((START END (CHAT-ID SEQUENCE-ID MSG-ID ...)) ...)
+   ...)
+
+Store the final chains in the database via
+`deterred-messenger-chains--save' and mark the affected tables as
+updated.  This function is called for side effects and returns the
+result of the final `message' call."
   (interactive)
   (deterred-utils-assert-var-set deterred-messengers-my-id)
   (let* ((db (or db (deterred-db--init)))
          (chats (deterred-db-select-alist
                  db "SELECT id, type FROM messenger_chat"))
-         (all-chat-chains nil)
+         (all-sequences nil)
          (total (length chats)))
     ;; Step 1: Per-chat processing
     (cl-loop for chat in chats
              for i from 1
-             for chat-entries = (deterred-messenger-chains--process-chat db chat)
-             when chat-entries
-             do (push chat-entries all-chat-chains)
+             for chat-sequences = (deterred-messenger-chains--process-chat db chat)
+             when chat-sequences
+             do (setq all-sequences (nconc all-sequences chat-sequences))
              when (= (% i 25) 0)
              do (message "Processed %d/%d chats for chains..." i total))
-    (message "Extracted chains from %d chats, intertwining..." (length all-chat-chains))
+    (message "Extracted %d raw chains, intertwining..." (length all-sequences))
     ;; Step 2: Intertwine
     (let ((normalized (deterred-utils-normalize-by-timeout
-                       all-chat-chains
+                       all-sequences
                        deterred-messenger-chains-message-gap
                        (lambda (a b)
-                         (cons (car a) (append (cdr a) (cdr b)))))))
+                         (append (list (nth 0 a) (nth 1 a))
+                                 (cddr a)
+                                 (cddr b))))))
       (message "Saving...")
       ;; Step 3: Save
       (with-sqlite-transaction db
@@ -281,13 +440,23 @@ rules), intertwines them across chats, and saves results."
         (deterred-db-mark-updated-batch
          db '(messenger_message_chain messenger_message)))
       (let ((total-chains (apply #'+ (mapcar #'length normalized))))
-        (message "Saved %d chains across %d chats"
+        (message "Saved %d chains across %d raw sequences"
                  total-chains (length normalized))))))
 
 (defun deterred-messenger-chains-compute-hostname (&optional db)
   "Update the hostname attribute in messages.
 
-DB is the SQLite database object."
+DB is an optional SQLite connection object.  When nil, initialize one
+with `deterred-db--init'.
+
+First mark all `messenger_message' rows whose timestamps fall inside
+the overall ActivityWatch not-afk range as \"<mobile>\" and clear the
+rest.  Then join messages against `activitywatch_notafk_period' and
+replace \"<mobile>\" with the concrete `hostname' of each matching
+period.
+
+This function updates the database in place and returns the result of
+the final `message' call."
   (interactive)
   (let* ((db (or db (deterred-db--init)))
          (borders
