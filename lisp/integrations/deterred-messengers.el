@@ -1316,5 +1316,22 @@ following files:
        :conflict-action 'do-update
        :conflict-attrs '(id)))))
 
+(defun deterred-messengers-delete-duplicates ()
+  "Delete duplicate messages from DETERRED."
+  (interactive)
+  (let ((db (deterred-db--init)))
+    (let ((count
+           (sqlite-execute
+            db
+            "DELETE FROM messenger_message
+WHERE rowid NOT IN (
+    SELECT MIN(rowid)
+    FROM messenger_message
+    WHERE content != ''
+    GROUP BY content, timestamp, chat_id
+)"
+            )))
+      (message "%s duplicates deleted" count))))
+
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
