@@ -23,7 +23,7 @@
 
 ;;; Commentary:
 
-;; TOOD
+;; This file has been mostly AI-generated.
 
 ;;; Code:
 (require 'deterred-db)

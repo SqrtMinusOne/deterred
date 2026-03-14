@@ -23,6 +23,8 @@
 
 ;;; Commentary:
 
+;; This file has been mostly AI-generated.
+;;
 ;; Export a single telega chat into an Org file with local attachments.
 
 ;;; Code:
