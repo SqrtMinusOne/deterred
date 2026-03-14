@@ -273,7 +273,7 @@ FROM wakatime_entities WHERE project_path IS NULL"))
              do (push `(,@entity
                         (project_path . ,project-path))
                       entities-update-data)
-             when (= (% i 100))
+             when (= (% i 100) 0)
              do (message "Postprocessing %d/%d wakatime entities" i total-entities))
     (when entities-update-data
       (deterred-db-insert-unsafe
@@ -483,13 +483,15 @@ large value and download everything, but I haven't tried this."
                  (append
                   (mapcar (lambda (f) (format "wakatime_%s" (car f)))
                           deterred-wakatime-key-mappings)
-                  (list "wakatime_projects")
+                  (list "wakatime_projects" "wakatime_items")
                   nil))))
-            (if callback
-                (funcall callback)
-              (message "Done fetching %s projects from WakaTime"
-                       (seq-length project-names))
-              (deterred-wakatime-api-fetch-heartbeats)))
+            (deterred-wakatime-api-fetch-heartbeats
+             nil
+             (lambda ()
+               (if callback
+                   (funcall callback)
+                 (message "Done fetching %s projects from WakaTime"
+                          (seq-length project-names))))))
           nil
           range-days)))
      nil
@@ -607,31 +609,36 @@ the SQLite connection object."
   (let ((db (or db (deterred-db--init))))
     (caar
      (sqlite-execute
-      db "SELECT MIN (start_timestamp) FROM wakatime_item"))))
+      db "SELECT MAX (start_timestamp) FROM wakatime_item"))))
 
-(defun deterred-wakatime-api-fetch-heartbeats (&optional timestamp)
-  "Fetch WakaTime heartbeats, starting from TIMESTAMP."
+(defun deterred-wakatime-api-fetch-heartbeats (&optional timestamp callback)
+  "Fetch WakaTime heartbeats, starting from TIMESTAMP.
+
+Call CALLBACK when done."
   (interactive)
   (if (not timestamp)
       (if-let ((start-from-db (deterred-wakatime--get-last-heartbeat-timestamp)))
           (deterred-wakatime-api-fetch-heartbeats
-           (deterred-utils-ts-to-day-start start-from-db))
+           (deterred-utils-ts-to-day-start start-from-db) callback)
         (deterred-wakatime-api--get-all-time-range
          (lambda (data)
-           (deterred-wakatime-api-fetch-heartbeats (car data)))))
+           (deterred-wakatime-api-fetch-heartbeats (car data) callback))))
     (let ((date (format-time-string "%Y-%m-%d" timestamp t)))
       (if (> timestamp (time-convert nil 'integer))
-          (message "Fetching done")
+          (progn
+            (when callback
+              (funcall callback))
+            (message "Fetching done"))
         (message "Fetching WakaTime heartbeats on %s" date)
         (deterred-utils-rate-limit
          0.3
-         (lambda (callback)
+         (lambda (next-callback)
            (deterred-wakatime--api-get-heartbeats
             date
             (lambda (data)
               (deterred-wakatime--store-processed-heartbeats
                (deterred-wakatime--process-heartbeats data))
-              (funcall callback (+ timestamp (* 24 60 60))))))
+              (funcall next-callback (+ timestamp (* 24 60 60)) callback))))
          #'deterred-wakatime-api-fetch-heartbeats)))))
 
 ;;;###autoload
