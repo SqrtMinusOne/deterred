@@ -75,6 +75,21 @@ that many days plus one overlap day."
           (const :tag "Auto infer from local data" nil)
           (number :tag "Fixed number of days")))
 
+(defcustom deterred-wakatime-normalize-items-timeout 120
+  "Normalize heartbeats into wakatime project work items.
+
+The value is the number of seconds, e.g., if it's 120, and the
+heartbeats are 0, 60, 120, 180, 300, 420, 540, it will result in two
+intervals, 0-180 and 300-540."
+  :group 'deterred-sources
+  :type 'integer)
+
+(defcustom deterred-wakatime-exclude-languages
+  '("Image (jpeg)" "Image (png)" "Image (svg)")
+  "Exclude these languages from the heartbeat import."
+  :group 'deterred-sources
+  :type 'integer)
+
 (defcustom deterred-wakatime-wakapi-compatibility-mode nil
   "Whether to adapt summary parsing for Wakapi compatibility API.
 
@@ -133,6 +148,13 @@ and add one overlap day."
               7)))
       (1+ missing-days))))
 
+(defun deterred-wakatime--get-project-id-and-name (name)
+  "Process project NAME and get its ID and name."
+  (let ((name (funcall deterred-wakatime-process-project-name name)))
+    (cons
+     (uuidgen-3 deterred-wakatime-uuid-namespace name)
+     name)))
+
 (defun deterred-wakatime--process-project (day-in-project db)
   "Get project ID from DAY-IN-PROJECT.
 
@@ -141,9 +163,8 @@ aggregate of the project activity in a given day.  DB is a SQLite
 object.
 
 Return the project ID."
-  (let* ((name (funcall deterred-wakatime-process-project-name
-                        (alist-get 'name day-in-project)))
-         (id (uuidgen-3 deterred-wakatime-uuid-namespace name)))
+  (pcase-let ((`(,id . ,name) (deterred-wakatime--get-project-id-and-name
+                               (alist-get 'name day-in-project))))
     (sqlite-execute db "INSERT INTO wakatime_projects (id, name) VALUES (?, ?)
                      ON CONFLICT (id) DO NOTHING"
                     (list id name))
@@ -467,11 +488,151 @@ large value and download everything, but I haven't tried this."
             (if callback
                 (funcall callback)
               (message "Done fetching %s projects from WakaTime"
-                       (seq-length project-names))))
+                       (seq-length project-names))
+              (deterred-wakatime-api-fetch-heartbeats)))
           nil
           range-days)))
      nil
      range-days)))
+
+(defun deterred-wakatime--process-heartbeats (data)
+  "Process and normalize WakaTime heartbeats DATA.
+
+DATA is a WakaTime GET heartbeats response.  It seems like the
+heartbeats are returned in the GMT time zone, whatever the system
+settings.
+
+This returns a sorted list of lists with the following values:
+- start timestamp
+- end timestamp
+- project_id
+
+The timestamp ranges are non-overlapping and are normalized with
+`deterred-utils-normalize-by-timeout'."
+  (let* (;; A list of ((project_id (timestamp timestamp ...) ...) here
+         (chain-data
+          (thread-last
+            (alist-get 'data data)
+            (seq-filter
+             (lambda (h)
+               (not (member
+                     (alist-get 'language h)
+                     deterred-wakatime-exclude-languages))))
+            (mapcar
+             (lambda (h)
+               (let ((project-id
+                      (car (deterred-wakatime--get-project-id-and-name
+                            (or (alist-get 'project h) "Unknown Project")))))
+                 (cons project-id
+                       (time-convert
+                        (encode-time (iso8601-parse (alist-get 'created_at h)))
+                        'integer)))))
+            (seq-group-by #'car)
+            (mapcar (lambda (group) (cons (car group) (mapcar #'cdr (cdr group)))))))
+         (chains
+          (deterred-utils-normalize-by-timeout
+           (mapcar (lambda (chain)
+                     (mapcar (lambda (timestamp)
+                               (list timestamp nil (car chain)))
+                             (cdr chain)))
+                   chain-data)
+           deterred-wakatime-normalize-items-timeout
+           (lambda (d1 _d2)
+             d1)))
+         ;; A normalized list of (start end project_id) here
+         (data (seq-sort-by #'car #'> (mapcan #'identity chains))))
+    data))
+
+(defun deterred-wakatime--api-get-heartbeats (date callback)
+  "Retrive callbacks from WakaTime on DATE.
+
+Call CALLBACK with the results."
+  (let ((params `(("api_key" . ,deterred-wakatime-api-key)
+                  ("date" . ,date))))
+    (request (concat deterred-wakatime-api-endpoint "users/current/heartbeats")
+      :parser 'json-read
+      :params `(,@params)
+      :encoding 'utf-8
+      :success (cl-function
+                (lambda (&key data &allow-other-keys)
+                  (funcall callback data)))
+      :error #'deterred-utils-on-request-error)))
+
+(defun deterred-wakatime-api--get-all-time-range (callback)
+  "Call CALLBACK with (start . end) timestamps from WakaTime."
+  (let ((params `(("api_key" . ,deterred-wakatime-api-key))))
+    (request (concat deterred-wakatime-api-endpoint
+                     "users/current/all_time_since_today")
+      :parser 'json-read
+      :params `(,@params)
+      :encoding 'utf-8
+      :success
+      (cl-function
+       (lambda (&key data &allow-other-keys)
+         (let* ((range (alist-get 'range (alist-get 'data data)))
+                (offset (car (current-time-zone nil (alist-get 'timezone range)))))
+           (funcall callback
+                    (cons
+                     (+ (time-convert
+                         (encode-time (iso8601-parse
+                                       (alist-get 'start range)))
+                         'integer)
+                        offset)
+                     (+ (time-convert
+                         (encode-time (iso8601-parse
+                                       (alist-get 'end range)))
+                         'integer)
+                        offset))))))
+      :error #'deterred-utils-on-request-error)))
+
+(defun deterred-wakatime--store-processed-heartbeats (data &optional db)
+  "Store processed heartbeats in DETERRED.
+
+DATA is as returned by `deterred-wakatime--process-heartbeats'.  DB is
+the SQLite connection object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-insert-unsafe
+     db
+     :table-name 'wakatime_item
+     :values (mapcar (lambda (d)
+                       `((start_timestamp . ,(nth 0 d))
+                         (end_timestamp . ,(nth 1 d))
+                         (project_id . ,(nth 2 d))))
+                     data)
+     :conflict-action 'do-nothing
+     :conflict-attrs '(start_timestamp end_timestamp project_id))))
+
+(defun deterred-wakatime--get-last-heartbeat-timestamp (&optional db)
+  "Get last saved WakaTime heartbeat timestamp from DETERRED DB."
+  (let ((db (or db (deterred-db--init))))
+    (caar
+     (sqlite-execute
+      db "SELECT MIN (start_timestamp) FROM wakatime_item"))))
+
+(defun deterred-wakatime-api-fetch-heartbeats (&optional timestamp)
+  "Fetch WakaTime heartbeats, starting from TIMESTAMP."
+  (interactive)
+  (if (not timestamp)
+      (if-let ((start-from-db (deterred-wakatime--get-last-heartbeat-timestamp)))
+          (deterred-wakatime-api-fetch-heartbeats
+           (deterred-utils-ts-to-day-start start-from-db))
+        (deterred-wakatime-api--get-all-time-range
+         (lambda (data)
+           (deterred-wakatime-api-fetch-heartbeats (car data)))))
+    (let ((date (format-time-string "%Y-%m-%d" timestamp t)))
+      (if (> timestamp (time-convert nil 'integer))
+          (message "Fetching done")
+        (message "Fetching WakaTime heartbeats on %s" date)
+        (deterred-utils-rate-limit
+         0.3
+         (lambda (callback)
+           (deterred-wakatime--api-get-heartbeats
+            date
+            (lambda (data)
+              (deterred-wakatime--store-processed-heartbeats
+               (deterred-wakatime--process-heartbeats data))
+              (funcall callback (+ timestamp (* 24 60 60))))))
+         #'deterred-wakatime-api-fetch-heartbeats)))))
 
 ;;;###autoload
 (defclass deterred-wakatime (deterred-source)

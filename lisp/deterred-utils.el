@@ -356,5 +356,23 @@ converting a list of individual \"heartbeats\" into timespans."
       #'<
       (seq-group-by #'car normalized-series)))))
 
+(defun deterred-utils-rate-limit (value fn callback)
+  "Ensure that CALLBACK is called no later than after VALUE seconds.
+
+FN has to be an async function that accepts the callback function as
+its sole argument.  Using this is equivalent to:
+\(funcall fn callback)
+
+Except that CALLBACK is guaranteed to be called after VALUE seconds."
+  (let ((start (float-time)))
+    (funcall
+     fn
+     (lambda (&rest results)
+       (let ((delta (- (float-time) start)))
+         (if (> delta value)
+             (apply callback results)
+           (run-with-timer (- value delta)
+                           nil (lambda () (apply callback results)))))))))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here
