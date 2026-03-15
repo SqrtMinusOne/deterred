@@ -5,7 +5,7 @@
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (request "0.3.2") (validate "1.0.4") (magit-section "4.3.6") (org "9.6.6"))
+;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (request "0.3.2") (validate "1.0.4") (magit-section "4.3.6") (org "9.6.6") (llm "0.29.0"))
 ;; Homepage: https://github.com/SqrtMinusOne/deterred.el
 
 ;; This file is NOT part of GNU Emacs.
@@ -49,7 +49,7 @@
 (require 'deterred-hledger)
 (require 'deterred-hledger-exchange)
 (require 'deterred-locations)
-(require 'deterred-messenger-chains)
+(require 'deterred-messengers-chains)
 (require 'deterred-messengers)
 (require 'deterred-mpd)
 (require 'deterred-mpd-emms)

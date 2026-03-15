@@ -26,19 +26,25 @@
 ;; TODO
 
 ;;; Code:
+(require 'llm)
+
 (require 'deterred-db)
 (require 'deterred-format)
 (require 'deterred-messengers)
 
-(defcustom deterred-messengers-category-alist
-  '(("education" . "Messages related to formal learning, courses, or educational content")
-    ("work" . "Messages related to professional work, mostly programming or technical topics")
-    ("personal" . "Anything else not clearly related to another category"))
+(defcustom deterred-messengers-categories-alist
+  '(("education" . "Messages related to our learning activities")
+    ("work" . "Messages clearly related to professional work, mostly programming or technical topics. Don't choose if in doubt.")
+    ("personal" . "Anything else not clearly related to another category and various personal matters"))
   "Alist of categories for classifying ambigous message sequences.
 
 This must include all categories in ambigous messenger_chat chats,
 i.e., ones with the category field like a|b|c."
   :type '(alist :key-type string :value-type string)
+  :group 'deterred-sources)
+
+(defcustom deterred-messengers-categories-llm-provider nil
+  "An LLM provider instance for categorising ambigous chats."
   :group 'deterred-sources)
 
 (defun deterred-messengers-categories--assign-by-chat (db)
@@ -47,10 +53,7 @@ i.e., ones with the category field like a|b|c."
 DB is the SQLite database object."
   (sqlite-execute
    db
-   "UPDATE messenger_message
-SET category = (SELECT category FROM messenger_chat mc WHERE chat_id = mc.id)
-WHERE chat_id IN (SELECT id FROM messenger_chat WHERE category IS NOT NULL AND category NOT LIKE \"%|%\")
-  AND chain_id is not null"))
+   "0"))
 
 (defun deterred-messengers-categories--fetch-sequences (db all chat-id)
   "Fetch all message sequences for CHAT-ID.
@@ -108,7 +111,7 @@ SEQUENCE is a list of lists like:
 - message contents.
 
 CATEGORIES is a list of strings, all of which must be keys
-`deterred-messengers-category-alist'."
+`deterred-messengers-categories-alist'."
   (deterred-format
    "Task: Classify the following message sequence into one of the categories.\n"
    "If unclear, prefer the first categories in the list.\n"
@@ -116,11 +119,11 @@ CATEGORIES is a list of strings, all of which must be keys
    (f-mapconcat
     (lambda (category)
       (if-let ((description
-                (alist-get category deterred-messengers-category-alist
+                (alist-get category deterred-messengers-categories-alist
                            nil nil #'equal)))
           (concat "- " category ": " description)
         (user-error
-         "Unknown category %s, configure `deterred-messengers-category-alist'"
+         "Unknown category %s, configure `deterred-messengers-categories-alist'"
          category)))
     categories
     "\n")
@@ -131,7 +134,7 @@ CATEGORIES is a list of strings, all of which must be keys
       (concat
        (nth 0 msg)
        ": "
-       (nth 1 msg)))
+       (replace-regexp-in-string "[^[:print:]\n]" "" (nth 1 msg))))
     sequence)
    "\n"
    "Category:"))
@@ -141,7 +144,7 @@ CATEGORIES is a list of strings, all of which must be keys
 
 CHAT-ID is the chat id, DB is the SQLite connection object.  If ALL is
 nil, return only uncategories messages.  Create a buffer with
-MAX-PROMPTS mesages."
+MAX-PROMPTS messages sequences."
   (interactive
    (let* ((db (deterred-db--init))
           (chats (mapcar
@@ -175,6 +178,102 @@ MAX-PROMPTS mesages."
         (goto-char (point-min))
         (special-mode))
       (display-buffer buffer))))
+
+(defun deterred-messengers-categories--query-category (prompt callback)
+  "Query an LLM with PROMPT category.
+
+Call CALLBACK with the result or nil, if unsuccessful."
+  (llm-chat-async deterred-messengers-categories-llm-provider
+                  (llm-make-chat-prompt prompt :reasoning 'none)
+                  (lambda (response)
+                    (let ((cand (string-trim response)))
+                      (if (alist-get cand deterred-messengers-categories-alist
+                                     nil nil #'equal)
+                          (funcall callback cand)
+                        (funcall callback nil))))
+                  (lambda (err msg)
+                    (message "LLM generation error: %s %s" msg err))))
+
+(defun deterred-messengers-categories--process-chat-recursively
+    (sequences categories start-time i total chat-name retry callback)
+  "Recursively process message SEQUENCES to assign them CATEGORIES.
+
+START-TIME is the processing start time, I is the current message
+index of TOTAL.  SEQUENCES gets `cdr'-ed on each iteration.  RETRY is
+the retry count, if it's more than 3, stop retrying to process the
+current sequence.  CHAT-NAME is the chat name.
+
+Call CALLBACK when done."
+  (if (seq-empty-p sequences)
+      (progn
+        (message "Processing %s done" chat-name)
+        (funcall callback))
+    (let* ((sequence-id (caar sequences))
+           (sequence (cdar sequences))
+           (prompt (deterred-messengers-categories--format-prompt
+                    sequence categories))
+           (eta (/
+                 (*
+                  (/ (float (- (time-convert nil 'integer) start-time)) i) (- total i))
+                 60)))
+      (message "Processing %s: %s/%s (ETA: %s)" chat-name i total
+               (if (isnan eta) "?" (org-duration-from-minutes eta)))
+      (deterred-messengers-categories--query-category
+       prompt
+       (lambda (category)
+         (if (null category)
+             (if (> retry 3)
+                 (progn
+                   (message "Can't determine category for %s" sequence-id)
+                   (deterred-messengers-categories--process-chat-recursively
+                    (cdr sequences) categories start-time (1+ i) total chat-name
+                    0 callback))
+               (deterred-messengers-categories--process-chat-recursively
+                sequences categories start-time i total chat-name
+                (1+ retry) callback))
+           (let ((db (deterred-db--init)))
+             (sqlite-execute
+              db "UPDATE messenger_message
+SET category = ?
+WHERE chain_id IN (SELECT id FROM messenger_message_chain WHERE sequence_id = ?)"
+              (list category sequence-id)))
+           (deterred-messengers-categories--process-chat-recursively
+            (cdr sequences) categories start-time (1+ i) total chat-name
+            0 callback)))))))
+
+(defun deterred-messengers-categories-process-chat (chat-id db all &optional callback)
+  "Assign categories to messages in CHAT-ID.
+
+CHAT-ID is the chat id, DB is the SQLite connection object.  If ALL is
+nil, process only uncategoried messages.  Call optional CALLBACK when
+done."
+  (interactive
+   (let* ((db (deterred-db--init))
+          (chats (mapcar
+                  (lambda (c)
+                    (cons (alist-get 'name c) (alist-get 'id c)))
+                  (deterred-db-select-alist
+                   db "SELECT id, name FROM messenger_chat WHERE category LIKE \"%|%\""))))
+     (list
+      (alist-get (completing-read "Chat: " chats) chats nil nil #'equal)
+      db
+      (not (y-or-n-p "Exclude messages with configured categories?")))))
+  (let* ((chat (car (deterred-db-select-alist
+                     db "SELECT * FROM messenger_chat WHERE id = ?" (list chat-id))))
+         (category-string (alist-get 'category chat)))
+    (unless (and (stringp category-string)
+                 (string-match-p (rx  "|") category-string))
+      (user-error "Please set a |-separated category for chat %s" chat-id))
+    (let* ((categories (string-split category-string "|" t))
+           (sequences
+            (deterred-messengers-categories--fetch-sequences
+             db all chat-id)))
+      (deterred-messengers-categories--process-chat-recursively
+       sequences categories (time-convert nil 'integer) 0 (seq-length sequences)
+       (alist-get 'name chat) 0
+       (lambda ()
+         (when callback
+           (funcall callback)))))))
 
 (provide 'deterred-messengers-categories)
 ;;; deterred-messengers-categories.el ends here
