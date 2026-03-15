@@ -42,6 +42,7 @@
     (:chat-type)
     (:chat-name)
     (:messenger)
+    (:category)
     (:n-top-chats . 5)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-messengers))
@@ -65,6 +66,13 @@
             db "SELECT DISTINCT name FROM messenger_chat
 WHERE name IS NOT NULL
 ORDER BY name")))
+         (categories
+          (mapcar
+           (lambda (item) (alist-get 'category item))
+           (deterred-db-select-alist
+            db "SELECT DISTINCT category FROM messenger_message
+WHERE category IS NOT NULL
+ORDER BY category")))
          (messengers (copy-sequence deterred-messengers-messenger-list)))
     (deterred-dashboard-widget-completing-read-multiple
      :name "Chat type"
@@ -79,7 +87,12 @@ ORDER BY name")))
     (deterred-dashboard-widget-completing-read-multiple
      :name "Messenger"
      :key :messenger
-     :options messengers))
+     :options messengers)
+    (insert "\n")
+    (deterred-dashboard-widget-completing-read-multiple
+     :name "Category"
+     :key :category
+     :options categories))
   (insert "\n")
   (deterred-dashboard-widget-number
    :name "Top N chats"
@@ -94,6 +107,11 @@ ORDER BY name")))
     (sent-received-per-month (name . "Messages sent/received per month"))
     (personal-sent-received-per-month (name . "Personal messages sent/received per month"))
     (group-sent-received-per-month (name . "Group messages sent/received per month"))
+    (messages-per-category (name . "Messages and time per category"))
+    (category-per-month (name . "Messages per category per month"))
+    (category-per-year (name . "Messages per category per year"))
+    (category-time-per-month (name . "Hours spent per category per month"))
+    (category-time-per-year (name . "Hours spent per category per year"))
     (top-personal-chats (name . "Top personal chats"))
     (top-group-chats (name . "Top group chats"))
     (top-group-chat-users (name . "Top users in group chats"))
@@ -140,6 +158,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
 ) AS sent_count,
 (
   SELECT count(*)
@@ -151,6 +170,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
 ) AS received_count,
 (
   SELECT count(DISTINCT mc.id)
@@ -162,6 +182,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
 ) AS chat_count,
 (
   SELECT CAST(sum(mmc.timestamp_end - mmc.timestamp_start) / 3600.0 * 100 AS integer) / 100.0
@@ -173,6 +194,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 ) AS total_hours,
 (
   SELECT CAST(COALESCE(sum(sub.duration), 0) / 3600.0 * 100 AS integer) / 100.0
@@ -195,6 +217,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
       [[AND mc.type IN :chat-type]]
       [[AND mc.name IN :chat-name]]
       [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+      [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   ) sub
   WHERE sub.device = 'mobile'
 ) AS mobile_hours,
@@ -219,6 +242,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
       [[AND mc.type IN :chat-type]]
       [[AND mc.name IN :chat-name]]
       [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+      [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   ) sub
   WHERE sub.device = 'pc'
 ) AS pc_hours;"
@@ -239,6 +263,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
       (personal-sent-received-per-year
@@ -255,6 +280,7 @@ WHERE mc.type = 'personal_chat'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
       (group-sent-received-per-year
@@ -271,6 +297,7 @@ WHERE mc.type = 'group'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
       (sent-received-per-month
@@ -288,6 +315,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
       (personal-sent-received-per-month
@@ -304,6 +332,7 @@ WHERE mc.type = 'personal_chat'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
       (group-sent-received-per-month
@@ -320,8 +349,154 @@ WHERE mc.type = 'group'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
            (append params `((:my-id . ,my-id)))))
+      (messages-per-category
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH category_messages AS (
+  SELECT
+    mm.category,
+    count(*) messages
+  FROM messenger_message mm
+  INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+  WHERE mm.category IS NOT NULL
+    [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
+  GROUP BY mm.category
+), category_hours AS (
+  SELECT
+    chain_category.category,
+    CAST(sum(chain_category.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+  FROM (
+    SELECT
+      mmc.id chain_id,
+      min(mm.category) category,
+      (mmc.timestamp_end - mmc.timestamp_start) duration
+    FROM messenger_message_chain mmc
+    INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+    INNER JOIN messenger_message mm ON mm.chain_id = mmc.id
+    WHERE mm.category IS NOT NULL
+      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+      [[AND mc.type IN :chat-type]]
+      [[AND mc.name IN :chat-name]]
+      [[AND mm.messenger IN :messenger]]
+      [[AND EXISTS (SELECT 1 FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id AND mm2.category IN :category)]]
+    GROUP BY mmc.id
+    HAVING count(DISTINCT mm.category) = 1
+  ) chain_category
+  GROUP BY chain_category.category
+)
+SELECT
+  cm.category,
+  cm.messages,
+  COALESCE(ch.hours, 0) hours
+FROM category_messages cm
+LEFT JOIN category_hours ch ON ch.category = cm.category
+ORDER BY cm.messages DESC, cm.category ASC"
+           params))
+      (category-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mm.timestamp, 'unixepoch') month,
+  mm.category,
+  count(*) messages
+FROM messenger_message mm
+INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+WHERE mm.category IS NOT NULL
+  [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
+GROUP BY month, mm.category
+ORDER BY month ASC, mm.category ASC"
+           params))
+      (category-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', mm.timestamp, 'unixepoch') year,
+  mm.category,
+  count(*) messages
+FROM messenger_message mm
+INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+WHERE mm.category IS NOT NULL
+  [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
+GROUP BY year, mm.category
+ORDER BY year ASC, mm.category ASC"
+           params))
+      (category-time-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', chain_category.timestamp_start, 'unixepoch') month,
+  chain_category.category,
+  CAST(sum(chain_category.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM (
+  SELECT
+    mmc.id chain_id,
+    mmc.timestamp_start,
+    min(mm.category) category,
+    (mmc.timestamp_end - mmc.timestamp_start) duration
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  INNER JOIN messenger_message mm ON mm.chain_id = mmc.id
+  WHERE mm.category IS NOT NULL
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mm.messenger IN :messenger]]
+    [[AND EXISTS (SELECT 1 FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id AND mm2.category IN :category)]]
+  GROUP BY mmc.id
+  HAVING count(DISTINCT mm.category) = 1
+) chain_category
+GROUP BY month, chain_category.category
+ORDER BY month ASC, chain_category.category ASC"
+           params))
+      (category-time-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y', chain_category.timestamp_start, 'unixepoch') year,
+  chain_category.category,
+  CAST(sum(chain_category.duration) / 3600.0 * 100 AS integer) / 100.0 hours
+FROM (
+  SELECT
+    mmc.id chain_id,
+    mmc.timestamp_start,
+    min(mm.category) category,
+    (mmc.timestamp_end - mmc.timestamp_start) duration
+  FROM messenger_message_chain mmc
+  INNER JOIN messenger_chat mc ON mc.id = mmc.chat_id
+  INNER JOIN messenger_message mm ON mm.chain_id = mmc.id
+  WHERE mm.category IS NOT NULL
+    [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mm.messenger IN :messenger]]
+    [[AND EXISTS (SELECT 1 FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id AND mm2.category IN :category)]]
+  GROUP BY mmc.id
+  HAVING count(DISTINCT mm.category) = 1
+) chain_category
+GROUP BY year, chain_category.category
+ORDER BY year ASC, chain_category.category ASC"
+           params))
       (top-personal-chats
        . ,(deterred-db-select-template-alist
            db
@@ -335,6 +510,7 @@ GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
    WHERE mmc.chat_id = mc.id
      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+     [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   ) hours
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
@@ -343,6 +519,7 @@ WHERE mc.type = 'personal_chat'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY mc.name
 ORDER BY total DESC
 LIMIT 20"
@@ -360,6 +537,7 @@ LIMIT 20"
    WHERE mmc.chat_id = mc.id
      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+     [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   ) hours
 FROM messenger_message mm
 INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
@@ -368,6 +546,7 @@ WHERE mc.type = 'group'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY mc.name
 ORDER BY total DESC
 LIMIT 20"
@@ -387,6 +566,7 @@ WHERE mc.type = 'group'
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY mu.name
 ORDER BY total DESC
 LIMIT 20"
@@ -405,6 +585,7 @@ LIMIT 20"
     [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
   GROUP BY mc.name
   ORDER BY total DESC
   LIMIT :n-top-chats
@@ -420,6 +601,7 @@ WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
   [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch'), mc.name
 ORDER BY month ASC"
            (append params `((:my-id . ,my-id)))))
@@ -437,6 +619,7 @@ ORDER BY month ASC"
     [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
     [[AND mc.name IN :chat-name]]
     [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]
   GROUP BY mc.name
   ORDER BY total DESC
   LIMIT :n-top-chats
@@ -452,6 +635,7 @@ WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
   [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
   [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch'), mc.name
 ORDER BY month ASC"
            (append params `((:my-id . ,my-id)))))
@@ -467,6 +651,7 @@ ORDER BY month ASC"
    FROM messenger_message_chain mmc
    INNER JOIN messenger_chat mc2 ON mc2.id = mmc.chat_id
    WHERE EXISTS (SELECT 1 FROM messenger_message mm2 WHERE mm2.chain_id = mmc.id AND mm2.messenger = mm.messenger)
+     [[AND EXISTS (SELECT 1 FROM messenger_message mm3 WHERE mm3.chain_id = mmc.id AND mm3.category IN :category)]]
      [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
      [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
      [[AND mc2.type IN :chat-type]]
@@ -480,6 +665,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY mm.messenger
 ORDER BY total DESC"
            (append params `((:my-id . ,my-id)))))
@@ -499,6 +685,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y', mm.timestamp, 'unixepoch'), mm.messenger
 ORDER BY year ASC"
            (append params `((:my-id . ,my-id)))))
@@ -517,6 +704,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY date(mm.timestamp, 'unixepoch')
 ORDER BY sent DESC
 LIMIT 20"
@@ -536,6 +724,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%W', mm.timestamp, 'unixepoch')
 ORDER BY sent DESC
 LIMIT 20"
@@ -555,6 +744,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')
 ORDER BY sent DESC
 LIMIT 20"
@@ -573,6 +763,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY year"
            params))
       (personal-time-per-year
@@ -588,6 +779,7 @@ WHERE mc.type = 'personal_chat'
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY year"
            params))
       (group-time-per-year
@@ -603,6 +795,7 @@ WHERE mc.type = 'group'
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY year"
            params))
       (time-per-month
@@ -619,6 +812,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month"
            params))
       (personal-time-per-month
@@ -634,6 +828,7 @@ WHERE mc.type = 'personal_chat'
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month"
            params))
       (group-time-per-month
@@ -649,6 +844,7 @@ WHERE mc.type = 'group'
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month"
            params))
       (top-chats-time-per-month
@@ -665,6 +861,7 @@ GROUP BY month"
     [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   GROUP BY mc.name
   ORDER BY total DESC
   LIMIT :n-top-chats
@@ -679,6 +876,7 @@ WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
   [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month, mc.name
 ORDER BY month ASC"
            params))
@@ -696,6 +894,7 @@ ORDER BY month ASC"
     [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
   GROUP BY mc.name
   ORDER BY total DESC
   LIMIT :n-top-chats
@@ -710,6 +909,7 @@ WHERE mc.name IN (SELECT tc.name FROM top_chats tc)
   [[AND date(mmc.timestamp_start, 'unixepoch') >= date(:start-date, 'unixepoch')]]
   [[AND date(mmc.timestamp_start, 'unixepoch') <= date(:end-date, 'unixepoch')]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month, mc.name
 ORDER BY month ASC"
            params))
@@ -734,6 +934,7 @@ FROM (
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 ) sub
 WHERE sub.messenger IS NOT NULL
 GROUP BY year, sub.messenger
@@ -766,6 +967,7 @@ FROM (
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 ) sub
 WHERE sub.device IS NOT NULL
 GROUP BY year, sub.device
@@ -798,6 +1000,7 @@ FROM (
     [[AND mc.type IN :chat-type]]
     [[AND mc.name IN :chat-name]]
     [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+    [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 ) sub
 WHERE sub.device IS NOT NULL
 GROUP BY month, sub.device
@@ -817,6 +1020,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY day
 ORDER BY hours DESC
 LIMIT 20"
@@ -835,6 +1039,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY week
 ORDER BY hours DESC
 LIMIT 20"
@@ -853,6 +1058,7 @@ WHERE 1 = 1
   [[AND mc.type IN :chat-type]]
   [[AND mc.name IN :chat-name]]
   [[AND mmc.chat_id IN (SELECT DISTINCT mm.chat_id FROM messenger_message mm WHERE mm.messenger IN :messenger)]]
+  [[AND mmc.id IN (SELECT DISTINCT mm.chain_id FROM messenger_message mm WHERE mm.category IN :category)]]
 GROUP BY month
 ORDER BY hours DESC
 LIMIT 20"
@@ -913,13 +1119,20 @@ LIMIT 20"
     :max-rows 10
     :grid-button t)
    "\n"
+   (deterred-format (f-h2 "Categories") "\n"
+                    (f-h3 "Messages and time per category") "\n")
+   (deterred-grid-print-with-org
+    (alist-get 'data (alist-get 'messages-per-category data))
+    :column-names '((category . "Category") (messages . "Messages") (hours . "Hours spent"))
+    :max-rows 20
+    :grid-button t)
+   "\n"
    (deterred-format (f-h2 "Activity over time") "\n"))
   (deterred-dashboard-exec-python
    :python-code
    "import warnings
 warnings.filterwarnings('ignore')
 from matplotlib import pyplot as plt
-from matplotlib.ticker import MaxNLocator
 from deterred import fig_to_b64
 
 import pandas as pd
@@ -932,6 +1145,8 @@ df_group_year = pd.DataFrame(data['group-sent-received-per-year']['data'])
 df_month = pd.DataFrame(data['sent-received-per-month']['data'])
 df_personal_month = pd.DataFrame(data['personal-sent-received-per-month']['data'])
 df_group_month = pd.DataFrame(data['group-sent-received-per-month']['data'])
+df_category_month = pd.DataFrame(data['category-per-month']['data'])
+df_category_year = pd.DataFrame(data['category-per-year']['data'])
 df_top_chats = pd.DataFrame(data['top-chats-per-month']['data'])
 df_top_group_chats = pd.DataFrame(data['top-group-chats-per-month']['data'])
 df_messenger_year = pd.DataFrame(data['messenger-per-year']['data'])
@@ -957,6 +1172,9 @@ def plot_sent_received(ax, df, x_col, title):
     ax.set_xlabel(x_col.capitalize())
     ax.set_ylabel('Messages')
 
+def should_render_monthly(df, x_col='month'):
+    return len(df) > 0 and df[x_col].nunique() < 30
+
 # Total per year
 fig, ax = plt.subplots(figsize=(8, 5))
 plot_sent_received(ax, df_year, 'year', 'Messages sent/received per year')
@@ -973,44 +1191,53 @@ plot_sent_received(ax, df_group_year, 'year', 'Group messages sent/received per 
 images.append(fig_to_b64(fig))
 
 # Total per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_sent_received(ax, df_month, 'month', 'Messages sent/received per month')
-if len(df_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_sent_received(ax, df_month, 'month', 'Messages sent/received per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Personal per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_sent_received(ax, df_personal_month, 'month', 'Personal messages sent/received per month')
-if len(df_personal_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_personal_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_sent_received(ax, df_personal_month, 'month', 'Personal messages sent/received per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Group per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_sent_received(ax, df_group_month, 'month', 'Group messages sent/received per month')
-if len(df_group_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_group_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_sent_received(ax, df_group_month, 'month', 'Group messages sent/received per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Top chats per month - sent
 if len(df_top_chats) > 0:
     df_top_chats_sent = df_top_chats.pivot(index='month', columns='name', values='sent').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_top_chats_sent.plot(ax=ax, kind='line')
-    ax.set_title('Messages sent in top N personal chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Messages sent')
-    images.append(fig_to_b64(fig))
+    if len(df_top_chats_sent) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_top_chats_sent.plot(ax=ax, kind='line')
+        ax.set_title('Messages sent in top N personal chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Messages sent')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 
     # Top chats per month - received
     df_top_chats_received = df_top_chats.pivot(index='month', columns='name', values='received').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_top_chats_received.plot(ax=ax, kind='line')
-    ax.set_title('Messages received in top N personal chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Messages received')
-    images.append(fig_to_b64(fig))
+    if len(df_top_chats_received) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_top_chats_received.plot(ax=ax, kind='line')
+        ax.set_title('Messages received in top N personal chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Messages received')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 else:
     images.append(None)
     images.append(None)
@@ -1018,21 +1245,27 @@ else:
 # Top group chats per month - sent
 if len(df_top_group_chats) > 0:
     df_top_group_chats_sent = df_top_group_chats.pivot(index='month', columns='name', values='sent').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_top_group_chats_sent.plot(ax=ax, kind='line')
-    ax.set_title('Messages sent in top N group chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Messages sent')
-    images.append(fig_to_b64(fig))
+    if len(df_top_group_chats_sent) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_top_group_chats_sent.plot(ax=ax, kind='line')
+        ax.set_title('Messages sent in top N group chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Messages sent')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 
     # Top group chats per month - received
     df_top_group_chats_received = df_top_group_chats.pivot(index='month', columns='name', values='received').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_top_group_chats_received.plot(ax=ax, kind='line')
-    ax.set_title('Messages received in top N group chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Messages received')
-    images.append(fig_to_b64(fig))
+    if len(df_top_group_chats_received) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_top_group_chats_received.plot(ax=ax, kind='line')
+        ax.set_title('Messages received in top N group chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Messages received')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 else:
     images.append(None)
     images.append(None)
@@ -1059,6 +1292,36 @@ else:
     images.append(None)
     images.append(None)
 
+# Category per month
+if should_render_monthly(df_category_month):
+    df_category_month_pivot = df_category_month.pivot(index='month', columns='category', values='messages').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_category_month_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Messages per category per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Messages')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Category per year
+if len(df_category_year) > 0:
+    df_category_year_pivot = df_category_year.pivot(index='year', columns='category', values='messages').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_category_year_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Messages per category per year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Messages')
+    handles, labels = ax.get_legend_handles_labels()
+    ax.legend(handles, labels,
+              loc='upper center',
+              bbox_to_anchor=(0.5, -0.2),
+              ncol=max(1, min(4, len(df_category_year_pivot.columns))),
+              frameon=False)
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
 print(json.dumps(images))"
    :input data
    :on-success
@@ -1072,15 +1335,18 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Group messages sent/received per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 2))
      (insert "\n")
-     (insert (deterred-format (f-h3 "Messages sent/received per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 3))
-     (insert "\n")
-     (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 4))
-     (insert "\n")
-     (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 5))
-     (insert "\n")
+     (when (elt images 3)
+       (insert (deterred-format (f-h3 "Messages sent/received per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 3))
+       (insert "\n"))
+     (when (elt images 4)
+       (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 4))
+       (insert "\n"))
+     (when (elt images 5)
+       (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 5))
+       (insert "\n"))
      (when (elt images 6)
        (insert (deterred-format (f-h3 "Messages sent in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 6))
@@ -1104,6 +1370,14 @@ print(json.dumps(images))"
      (when (elt images 11)
        (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 11))
+       (insert "\n"))
+     (when (elt images 12)
+       (insert (deterred-format (f-h3 "Messages per category per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 12))
+       (insert "\n"))
+     (when (elt images 13)
+       (insert (deterred-format (f-h3 "Messages per category per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 13))
        (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"
@@ -1155,7 +1429,6 @@ print(json.dumps(images))"
    "import warnings
 warnings.filterwarnings('ignore')
 from matplotlib import pyplot as plt
-from matplotlib.ticker import MaxNLocator
 from deterred import fig_to_b64
 
 import pandas as pd
@@ -1173,6 +1446,8 @@ df_top_group_chats_time = pd.DataFrame(data['top-group-chats-time-per-month']['d
 df_messenger_time_year = pd.DataFrame(data['messenger-time-per-year']['data'])
 df_mobile_pc_year = pd.DataFrame(data['mobile-pc-time-per-year']['data'])
 df_mobile_pc_month = pd.DataFrame(data['mobile-pc-time-per-month']['data'])
+df_category_time_month = pd.DataFrame(data['category-time-per-month']['data'])
+df_category_time_year = pd.DataFrame(data['category-time-per-year']['data'])
 
 images = []
 
@@ -1183,6 +1458,9 @@ def plot_hours_bar(ax, df, x_col, title):
     ax.set_title(title)
     ax.set_xlabel(x_col.capitalize())
     ax.set_ylabel('Hours')
+
+def should_render_monthly(df, x_col='month'):
+    return len(df) > 0 and df[x_col].nunique() < 30
 
 # Time per year
 fig, ax = plt.subplots(figsize=(8, 5))
@@ -1200,47 +1478,56 @@ plot_hours_bar(ax, df_group_time_year, 'year', 'Time spent on group chats per ye
 images.append(fig_to_b64(fig))
 
 # Time per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_hours_bar(ax, df_time_month, 'month', 'Time spent on messengers per month')
-if len(df_time_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_time_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_hours_bar(ax, df_time_month, 'month', 'Time spent on messengers per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Personal time per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_hours_bar(ax, df_personal_time_month, 'month', 'Time spent on personal chats per month')
-if len(df_personal_time_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_personal_time_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_hours_bar(ax, df_personal_time_month, 'month', 'Time spent on personal chats per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Group time per month
-fig, ax = plt.subplots(figsize=(8, 5))
-plot_hours_bar(ax, df_group_time_month, 'month', 'Time spent on group chats per month')
-if len(df_group_time_month) > 30:
-    ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
-images.append(fig_to_b64(fig))
+if should_render_monthly(df_group_time_month):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_hours_bar(ax, df_group_time_month, 'month', 'Time spent on group chats per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
 
 # Top N personal chats time per month
 if len(df_top_chats_time) > 0:
     df_pivot = df_top_chats_time.pivot(index='month', columns='name', values='hours').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_pivot.plot(ax=ax, kind='line')
-    ax.set_title('Time in top N personal chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Hours')
-    images.append(fig_to_b64(fig))
+    if len(df_pivot) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_pivot.plot(ax=ax, kind='line')
+        ax.set_title('Time in top N personal chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Hours')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 else:
     images.append(None)
 
 # Top N group chats time per month
 if len(df_top_group_chats_time) > 0:
     df_pivot = df_top_group_chats_time.pivot(index='month', columns='name', values='hours').fillna(0)
-    fig, ax = plt.subplots(figsize=(8, 5))
-    df_pivot.plot(ax=ax, kind='line')
-    ax.set_title('Time in top N group chats per month')
-    ax.set_xlabel('Month')
-    ax.set_ylabel('Hours')
-    images.append(fig_to_b64(fig))
+    if len(df_pivot) < 30:
+        fig, ax = plt.subplots(figsize=(8, 5))
+        df_pivot.plot(ax=ax, kind='line')
+        ax.set_title('Time in top N group chats per month')
+        ax.set_xlabel('Month')
+        ax.set_ylabel('Hours')
+        images.append(fig_to_b64(fig))
+    else:
+        images.append(None)
 else:
     images.append(None)
 
@@ -1271,7 +1558,7 @@ else:
     images.append(None)
 
 # Mobile vs PC time per month
-if len(df_mobile_pc_month) > 0:
+if should_render_monthly(df_mobile_pc_month):
     df_pivot = df_mobile_pc_month.pivot(index='month', columns='device', values='hours').fillna(0)
     df_pct = df_pivot.div(df_pivot.sum(axis=1), axis=0) * 100
     fig, ax = plt.subplots(figsize=(8, 5))
@@ -1280,8 +1567,30 @@ if len(df_mobile_pc_month) > 0:
     ax.set_xlabel('Month')
     ax.set_ylabel('%')
     ax.set_ylim(0, 100)
-    if len(df_pct) > 30:
-        ax.xaxis.set_major_locator(MaxNLocator(nbins=40))
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Category time per month
+if should_render_monthly(df_category_time_month):
+    df_pivot = df_category_time_month.pivot(index='month', columns='category', values='hours').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Hours spent per category per month')
+    ax.set_xlabel('Month')
+    ax.set_ylabel('Hours')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+# Category time per year
+if len(df_category_time_year) > 0:
+    df_pivot = df_category_time_year.pivot(index='year', columns='category', values='hours').fillna(0)
+    fig, ax = plt.subplots(figsize=(8, 5))
+    df_pivot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title('Hours spent per category per year')
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Hours')
     images.append(fig_to_b64(fig))
 else:
     images.append(None)
@@ -1299,15 +1608,18 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Group chats time per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 2))
      (insert "\n")
-     (insert (deterred-format (f-h3 "Time spent per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 3))
-     (insert "\n")
-     (insert (deterred-format (f-h3 "Personal chats time per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 4))
-     (insert "\n")
-     (insert (deterred-format (f-h3 "Group chats time per month") "\n"))
-     (deterred-dashboard-print-images-base64 (elt images 5))
-     (insert "\n")
+     (when (elt images 3)
+       (insert (deterred-format (f-h3 "Time spent per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 3))
+       (insert "\n"))
+     (when (elt images 4)
+       (insert (deterred-format (f-h3 "Personal chats time per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 4))
+       (insert "\n"))
+     (when (elt images 5)
+       (insert (deterred-format (f-h3 "Group chats time per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 5))
+       (insert "\n"))
      (when (elt images 6)
        (insert (deterred-format (f-h3 "Time in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 6))
@@ -1327,6 +1639,14 @@ print(json.dumps(images))"
      (when (elt images 10)
        (insert (deterred-format (f-h3 "Mobile vs PC time per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 10))
+       (insert "\n"))
+     (when (elt images 11)
+       (insert (deterred-format (f-h3 "Hours spent per category per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 11))
+       (insert "\n"))
+     (when (elt images 12)
+       (insert (deterred-format (f-h3 "Hours spent per category per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 12))
        (insert "\n")))))
 
 (provide 'deterred-dashboard-messengers)

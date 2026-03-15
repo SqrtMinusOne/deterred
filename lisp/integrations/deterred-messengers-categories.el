@@ -34,11 +34,12 @@
 
 (defcustom deterred-messengers-categories-alist
   '(("education" . "Messages related to our learning activities")
+    ("teaching" . "Messages related to conducting and managing the education process")
     ("work" . "Messages clearly related to professional work, mostly programming or technical topics. Don't choose if in doubt.")
     ("personal" . "Anything else not clearly related to another category and various personal matters"))
   "Alist of categories for classifying ambigous message sequences.
 
-This must include all categories in ambigous messenger_chat chats,
+;; This must include all categories in ambigous messenger_chat chats,
 i.e., ones with the category field like a|b|c."
   :type '(alist :key-type string :value-type string)
   :group 'deterred-sources)
@@ -53,7 +54,10 @@ i.e., ones with the category field like a|b|c."
 DB is the SQLite database object."
   (sqlite-execute
    db
-   "0"))
+   "UPDATE messenger_message
+SET category = (SELECT category FROM messenger_chat mc WHERE chat_id = mc.id)
+WHERE chat_id IN (SELECT id FROM messenger_chat WHERE category IS NOT NULL AND category NOT LIKE \"%|%\")
+AND chain_id is not null"))
 
 (defun deterred-messengers-categories--fetch-sequences (db all chat-id)
   "Fetch all message sequences for CHAT-ID.
@@ -184,7 +188,7 @@ MAX-PROMPTS messages sequences."
 
 Call CALLBACK with the result or nil, if unsuccessful."
   (llm-chat-async deterred-messengers-categories-llm-provider
-                  (llm-make-chat-prompt prompt :reasoning 'none)
+                  (llm-make-chat-prompt prompt :reasoning 'none :max-tokens 50)
                   (lambda (response)
                     (let ((cand (string-trim response)))
                       (if (alist-get cand deterred-messengers-categories-alist
@@ -217,7 +221,9 @@ Call CALLBACK when done."
                   (/ (float (- (time-convert nil 'integer) start-time)) i) (- total i))
                  60)))
       (message "Processing %s: %s/%s (ETA: %s)" chat-name i total
-               (if (isnan eta) "?" (org-duration-from-minutes eta)))
+               (condition-case err
+                   (org-duration-from-minutes eta)
+                 (error "?")))
       (deterred-messengers-categories--query-category
        prompt
        (lambda (category)
@@ -274,6 +280,24 @@ done."
        (lambda ()
          (when callback
            (funcall callback)))))))
+
+(defun deterred-messengers-categories-process-all-chats (&optional chats recurse)
+  "Process all chat categories in DETERRED.
+
+CHATS is a recursive parameter.  RECURSE is t when recursion is happening."
+  (interactive)
+  (let ((db (deterred-db--init)))
+    (when (and (not chats) (not recurse))
+      (setq chats (deterred-db-select-alist
+                   db "SELECT id FROM messenger_chat WHERE category LIKE \"%|%\"")))
+    (unless recurse
+      (message "Processing unambigous chats...")
+      (deterred-messengers-categories--assign-by-chat db))
+    (when chats
+      (deterred-messengers-categories-process-chat
+       (alist-get 'id (car chats)) db nil
+       (lambda ()
+         (deterred-messengers-categories-process-all-chats (cdr chats) t))))))
 
 (provide 'deterred-messengers-categories)
 ;;; deterred-messengers-categories.el ends here
