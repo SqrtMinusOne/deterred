@@ -71,6 +71,9 @@
 
 (defvar deterred-ai--pricing-updated nil)
 
+(defconst deterred-ai--parse-progress-step 25
+  "How often to report session parsing progress.")
+
 (defun deterred-ai--ensure-pricing (callback)
   "Make sure that LLM pricing data from LiteLLM is fetched.
 
@@ -82,6 +85,7 @@ Call CALLBACK if the data has been fetched successfully or read from
 archive."
   (if deterred-ai--pricing-updated
       (funcall callback)
+    (message "deterred-ai: fetching pricing data")
     (request deterred-ai--pricing-litellm-url
       :parser 'json-read
       :encoding 'utf-8
@@ -307,6 +311,14 @@ Returns a list of alists with keys `jsonl-path' and `project-dir'."
                             result)))))))))))
     (nreverse result)))
 
+(defun deterred-ai--report-parse-progress (kind parsed total)
+  "Report parsing progress for KIND with PARSED sessions out of TOTAL."
+  (when (or (zerop parsed)
+            (= parsed total)
+            (zerop (% parsed deterred-ai--parse-progress-step)))
+    (message "deterred-ai: parsed %d/%d %s sessions"
+             parsed total kind)))
+
 (defun deterred-ai--claude-parse-all ()
   "Parse all Claude Code JSONL session files.
 
@@ -316,7 +328,11 @@ including subagent sessions.
 Returns a list of alists sorted by timestamp."
   (let* ((projects-dir (expand-file-name "projects" deterred-ai-claude-data-dir))
          (files (deterred-ai--claude-collect-jsonl-files projects-dir))
+         (total (length files))
+         (parsed 0)
          result)
+    (message "deterred-ai: parsing Claude sessions (%d files)" total)
+    (deterred-ai--report-parse-progress "Claude" parsed total)
     (dolist (file-info files)
       (let ((jsonl-path (alist-get 'jsonl-path file-info))
             (project-dir (alist-get 'project-dir file-info)))
@@ -324,7 +340,9 @@ Returns a list of alists sorted by timestamp."
             (dolist (entry (deterred-ai--claude-parse-jsonl jsonl-path))
               (push (cons (cons 'project-dir project-dir) entry) result))
           (error
-           (message "deterred-ai: error parsing %s: %s" jsonl-path err)))))
+           (message "deterred-ai: error parsing %s: %s" jsonl-path err))))
+      (cl-incf parsed)
+      (deterred-ai--report-parse-progress "Claude" parsed total))
     (seq-sort-by (lambda (e) (alist-get 'timestamp e)) #'< result)))
 
 (defun deterred-ai--codex-non-empty-string (value)
@@ -518,18 +536,25 @@ Returns a list of alists sorted by timestamp."
   "Parse all Codex JSONL session files."
   (let* ((sessions-dir (expand-file-name "sessions" deterred-ai-codex-data-dir))
          (files (deterred-ai--codex-collect-jsonl-files sessions-dir))
+         (total (length files))
+         (parsed 0)
          result)
+    (message "deterred-ai: parsing Codex sessions (%d files)" total)
+    (deterred-ai--report-parse-progress "Codex" parsed total)
     (dolist (jsonl-path files)
       (condition-case err
           (setq result
                 (append result
                         (deterred-ai--codex-parse-jsonl jsonl-path sessions-dir)))
         (error
-         (message "deterred-ai: error parsing %s: %s" jsonl-path err))))
+         (message "deterred-ai: error parsing %s: %s" jsonl-path err)))
+      (cl-incf parsed)
+      (deterred-ai--report-parse-progress "Codex" parsed total))
     (seq-sort-by (lambda (e) (alist-get 'timestamp e)) #'< result)))
 
 (defun deterred-ai--parse-all ()
   "Parse all configured AI usage JSONL files."
+  (message "deterred-ai: parsing AI usage data")
   (seq-sort-by
    (lambda (e) (alist-get 'timestamp e))
    #'<
@@ -638,6 +663,7 @@ paths against them.  Mutates ENTRIES in place."
 
 Adds `usd-cost', `hostname', and `project-id' to each entry and its
 files.  `deterred-ai--ensure-pricing' must be called before this."
+  (message "deterred-ai: postprocessing %d entries" (length entries))
   (let ((hostname (system-name)))
     (dolist (entry entries)
       (nconc entry (list (cons 'usd-cost (deterred-ai--calculate-cost entry))
@@ -704,6 +730,19 @@ CONFLICT-ACTION.  Never deletes existing data."
         (deterred-db-mark-updated db 'ai_usage_file)))
     (message "deterred-ai: stored %d items, %d files"
              (length item-values) (length file-values))))
+
+(defun deterred-ai--load-with-parser (description parser callback)
+  "Load AI usage data described by DESCRIPTION using PARSER.
+
+Call CALLBACK when done."
+  (message "deterred-ai: loading %s" description)
+  (deterred-ai--ensure-pricing
+   (lambda ()
+     (let ((entries (funcall parser)))
+       (message "deterred-ai: parsed %d entries" (length entries))
+       (deterred-ai--store (deterred-ai--postprocess entries))
+       (message "deterred-ai: backfilling project IDs")
+       (deterred-ai-backfill-project-ids callback)))))
 
 (defun deterred-ai--backfill-table-project-ids
     (db table-name path-attr id-by-path &optional extra-where)
@@ -802,33 +841,30 @@ If CALLBACK is non-nil, call it when done."
 
 If CALLBACK is non-nil, call it when done."
   (interactive)
-  (deterred-ai--ensure-pricing
-   (lambda ()
-     (let ((entries (deterred-ai--postprocess (deterred-ai--parse-all))))
-       (deterred-ai--store entries)
-       (deterred-ai-backfill-project-ids callback)))))
+  (deterred-ai--load-with-parser
+   "AI usage data"
+   #'deterred-ai--parse-all
+   callback))
 
 (defun deterred-ai-load-claude (&optional callback)
   "Load AI usage data from Claude Code JSONL files into DETERRED.
 
 If CALLBACK is non-nil, call it when done."
   (interactive)
-  (deterred-ai--ensure-pricing
-   (lambda ()
-     (let ((entries (deterred-ai--postprocess (deterred-ai--claude-parse-all))))
-       (deterred-ai--store entries)
-       (deterred-ai-backfill-project-ids callback)))))
+  (deterred-ai--load-with-parser
+   "Claude usage data"
+   #'deterred-ai--claude-parse-all
+   callback))
 
 (defun deterred-ai-load-codex (&optional callback)
   "Load AI usage data from Codex JSONL files into DETERRED.
 
 If CALLBACK is non-nil, call it when done."
   (interactive)
-  (deterred-ai--ensure-pricing
-   (lambda ()
-     (let ((entries (deterred-ai--postprocess (deterred-ai--codex-parse-all))))
-       (deterred-ai--store entries)
-       (deterred-ai-backfill-project-ids callback)))))
+  (deterred-ai--load-with-parser
+   "Codex usage data"
+   #'deterred-ai--codex-parse-all
+   callback))
 
 (defconst deterred-ai--pricing-recalc-batch-size 500
   "Batch size for recalculating stored AI pricing.")
