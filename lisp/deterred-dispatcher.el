@@ -456,6 +456,40 @@ Returns an alist with keys:
                   (format-time-string deterred-dispatcher-date-format end-timestamp)))
     (nreverse datum)))
 
+(defun deterred-dispatcher--range-dashboards ()
+  "Return dashboards that support both `:start-date' and `:end-date'."
+  (deterred-dashboard-maybe-init)
+  (seq-sort-by
+   (lambda (dashboard) (oref dashboard name))
+   #'string-lessp
+   (seq-filter
+    (lambda (dashboard)
+      (let ((params (deterred-dashboard-default-params dashboard)))
+        (and (assoc :start-date params)
+             (assoc :end-date params))))
+    deterred-dashboards)))
+
+(defun deterred-dispatcher--render-range-dashboards (start-timestamp end-timestamp)
+  "Render dashboard links for [START-TIMESTAMP, END-TIMESTAMP]."
+  (when-let ((dashboards (deterred-dispatcher--range-dashboards)))
+    (magit-insert-section (deterred-dispatcher-range-dashboards
+                           (cons start-timestamp end-timestamp)
+                           t)
+      (insert (propertize "Dashboards" 'face 'deterred-faces-section-heading-3))
+      (magit-insert-heading)
+      (dolist (dashboard dashboards)
+        (insert "- ")
+        (widget-create
+         'push-button
+         :notify (lambda (&rest _)
+                   (deterred-dashboard-open
+                    dashboard
+                    `((:start-date . ,start-timestamp)
+                      (:end-date . ,end-timestamp))))
+         (oref dashboard name))
+        (insert "\n"))
+      (insert "\n"))))
+
 (defun deterred-dispatcher--render-range (start-timestamp end-timestamp datum)
   "Render DATUM for a date range.
 
@@ -468,6 +502,9 @@ DATUM is as returned by `deterred-dispatcher--range-data'."
              (alist-get :description datum)
              'face 'deterred-faces-section-heading-2))
     (magit-insert-heading)
+    (deterred-dispatcher--render-range-dashboards
+     start-timestamp end-timestamp)
+    (insert "\n")
     (deterred-dispatcher--render-items
      datum
      'deterred-dispatcher-range-item
@@ -504,7 +541,8 @@ START-TIMESTAMP and END-TIMESTAMP are UNIX timestamps."
           (magit-insert-section (deterred-info)
             (deterred-dispatcher--render-range start-timestamp end-timestamp datum)
             (let ((magit-section-cache-visibility nil))
-              (magit-section-show magit-root-section))))))))
+              (magit-section-show magit-root-section)))
+          (widget-setup))))))
 
 (defun deterred-dispatcher--render-on-this-day (&optional db)
   "Render the \"On this day\" section for DETERRED.
@@ -568,7 +606,8 @@ DB is the SQLite connection object."
       (insert "\n\n")
       (deterred-dispatcher--render-on-this-day)
       (let ((magit-section-cache-visibility nil))
-        (magit-section-show magit-root-section))))
+        (magit-section-show magit-root-section)))
+    (widget-setup))
   (goto-char (point-min)))
 
 (defun deterred-dispatcher-refresh ()
