@@ -122,6 +122,8 @@
     (merge-keys :table-name mpd_song_listened :key-attrs (mpd_song_id timestamp))
     ;; `deterred-org-roam'
     (replace :table-names (org_roam_node_tag org_roam_node_modification org_roam_node))
+    ;; `deterred-org-clock'
+    (replace :table-names (org_clock_item org_headline))
     ;; `deterred-org-journal-tags'
     (replace :table-names (org_journal_record_tag org_journal_tag org_journal_record))
     ;; `deterred-podcasts'
