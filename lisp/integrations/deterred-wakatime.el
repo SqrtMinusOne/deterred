@@ -33,6 +33,7 @@
 
 ;;; Code:
 (require 'deterred-db)
+(require 'deterred-chains)
 (require 'deterred-source)
 (require 'deterred-utils)
 (require 'request)
@@ -510,7 +511,7 @@ This returns a sorted list of lists with the following values:
 - project_id
 
 The timestamp ranges are non-overlapping and are normalized with
-`deterred-utils-normalize-by-timeout'."
+`deterred-chains-normalize'."
   (let* (;; A list of ((project_id (timestamp timestamp ...) ...) here
          (chain-data
           (thread-last
@@ -532,7 +533,7 @@ The timestamp ranges are non-overlapping and are normalized with
             (seq-group-by #'car)
             (mapcar (lambda (group) (cons (car group) (mapcar #'cdr (cdr group)))))))
          (chains
-          (deterred-utils-normalize-by-timeout
+          (deterred-chains-normalize
            (mapcar (lambda (chain)
                      (mapcar (lambda (timestamp)
                                (list timestamp nil (car chain)))
@@ -555,6 +556,7 @@ Call CALLBACK with the results."
       :parser 'json-read
       :params `(,@params)
       :encoding 'utf-8
+      :timeout 15
       :success (cl-function
                 (lambda (&key data &allow-other-keys)
                   (funcall callback data)))
@@ -664,7 +666,8 @@ end timestamp."
 
 Run CALLBACK when done."
   (deterred-source--actions-pick
-   '(("Load Wakatime JSON" deterred-wakatime-load-json nil))
+   '(("Load Wakatime JSON" deterred-wakatime-load-json nil)
+     ("Sync Wakatime heartbeats" deterred-wakatime-api-fetch-heartbeats nil))
    callback))
 
 (cl-defmethod deterred-source-sync ((_source deterred-wakatime) &optional callback)

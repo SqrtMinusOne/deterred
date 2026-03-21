@@ -33,6 +33,7 @@
 ;;; Code:
 (require 'cl-lib)
 (require 'uuidgen)
+(require 'deterred-chains)
 (require 'deterred-db)
 (require 'deterred-messengers)
 (require 'deterred-utils)
@@ -154,7 +155,7 @@ first returned entry.  All later entries start at their own message
 timestamp.
 
 Return a list of normalized entries suitable for
-`deterred-utils-normalize-by-timeout'.  Each entry has the form:
+`deterred-chains-normalize'.  Each entry has the form:
 
   (START END (CHAT-ID SEQUENCE-ID MSG-ID))
 
@@ -314,7 +315,7 @@ Return nil when CHAT produces no retained raw chains."
 DB is the SQLite connection object.
 
 ALL-CHAINS must be the output of
-`deterred-utils-normalize-by-timeout'.  Its shape is:
+`deterred-chains-normalize'.  Its shape is:
 
   (((START END (CHAT-ID SEQUENCE-ID MSG-ID ...))
     ...)
@@ -388,7 +389,7 @@ with `deterred-db--init'.
 Fetch all chats from `messenger_chat', derive raw per-chat chains from
 their messages, apply personal-chat or group-chat filtering rules, and
 then pass the resulting normalized entries to
-`deterred-utils-normalize-by-timeout' to remove overlap across chats.
+`deterred-chains-normalize' to remove overlap across chats.
 
 The raw chains are preserved as separate sequences.  Each raw chain
 gets its own `sequence_id', and normalization trims overlap while
@@ -426,7 +427,7 @@ result of the final `message' call."
              do (message "Processed %d/%d chats for chains..." i total))
     (message "Extracted %d raw chains, intertwining..." (length all-sequences))
     ;; Step 2: Intertwine
-    (let ((normalized (deterred-utils-normalize-by-timeout
+    (let ((normalized (deterred-chains-normalize
                        all-sequences
                        deterred-messengers-chains-message-gap
                        (lambda (a b)

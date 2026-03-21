@@ -30,6 +30,7 @@
 ;;; Code:
 ;; Utilities
 (require 'deterred-faces)
+(require 'deterred-chains)
 (require 'deterred-format)
 (require 'deterred-utils)
 
@@ -54,6 +55,7 @@
 (require 'deterred-mpd)
 (require 'deterred-mpd-emms)
 (require 'deterred-org)
+(require 'deterred-org-clock)
 (require 'deterred-org-journal-tags)
 (require 'deterred-org-roam)
 (require 'deterred-podcasts)
