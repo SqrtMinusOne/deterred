@@ -318,5 +318,42 @@ ITEMS-LIST is an arbitrary list of objects."
     (mapcar #'prin1-to-string (seq-filter #'identity items-list))
     "--")))
 
+(defun deterred-utils-cells-to-alists (series car-name series-name &optional
+                                              process-values-fn)
+  "Convert SERIES to a list of alists.
+
+SERIES are lists of cons cells.  Return a list of alists, where the
+first element is car of cons cells, and the remaining elements are
+cdrs.
+
+CAR-NAME is the key for the car element, SERIES-NAME is a list of keys
+for SERIES.
+
+If PROCESS-VALUES-FN is non-nil, call it for each value."
+  (let ((res (make-hash-table :test #'equal)))
+    (cl-loop for i from 0
+             for one-series in series
+             do (dolist (item one-series)
+                  (unless (gethash (car item) res)
+                    (puthash (car item) (make-vector (seq-length series) nil) res))
+                  (aset (gethash (car item) res) i (cdr item))))
+    (cl-loop for key being the hash-keys of res
+             using (hash-values val)
+             collect (apply
+                      #'list
+                      (cons car-name key)
+                      (cl-loop for i from 0
+                               for v across val
+                               collect
+                               (cons (nth i series-name)
+                                     (if process-values-fn
+                                         (funcall process-values-fn v)
+                                       v)))))))
+
+(defun deterred-utils-round-to (value n)
+  "Round VALUE to N decimal digits."
+  (/ (fround (* (float value) (expt 10 n)))
+     (expt 10 n)))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

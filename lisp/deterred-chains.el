@@ -45,8 +45,10 @@ DATA.  When nil, the first entry's DATA is kept.
 
 The function returns chains in the same order, with each entry as
 \(START END DATA\), where START and END are always set.  Gaps less than
-TIMEOUT are removed.  This is similar to what WakaTime does by
-converting a list of individual \"heartbeats\" into timespans."
+TIMEOUT are removed.  Resulting chains do not intersect.
+
+This is similar to what WakaTime does by converting a list of
+individual \"heartbeats\" into timespans."
   (let (series
         normalized-series
         current-item)
@@ -96,6 +98,89 @@ converting a list of individual \"heartbeats\" into timespans."
       #'car
       #'<
       (seq-group-by #'car normalized-series)))))
+
+(defun deterred-chains-intersection (chains &optional merge-data-fn)
+  "Calculate intersection of CHAINS.
+
+A chain is a list of elements like (<start> <end> <data>), where
+<start> and <end> are mandatory and <data> is optional.
+
+Return one merged chain.
+
+If MERGE-DATA-FN is non-nil, it will be used to populate the <data>
+field of the merged chain.  The function will be called with N
+arguments, where N is the number of chains, and each argument is the
+data field of the relevant chain entry in the order that CHAINS were
+given."
+  (let ((series
+         ;; A list of (<'start | 'end> <timestamp> <data> <series-i>)
+         (seq-sort
+          (lambda (e1 e2)
+            ;; If timestamps are the same, ends go before starts
+            (if (= (nth 1 e1) (nth 1 e2))
+                (eq (nth 0 e1) 'end)
+              (< (nth 1 e1) (nth 1 e2))))
+          (cl-loop for i from 0
+                   for chain in chains
+                   append (cl-mapcan
+                           (lambda (e)
+                             (unless (nth 1 e)
+                               (error "`deterred-chains-interesction' requires both start and end in entries"))
+                             (list
+                              `(start ,(nth 0 e) ,(nth 2 e) ,i)
+                              `(end ,(nth 1 e) ,(nth 2 e) ,i)))
+                           chain))))
+        ;; Active entries from each chain
+        (entries-bitmap (make-vector (seq-length chains) nil))
+        current-intersection-start
+        intersections)
+    ;; Intersect series
+    (dolist (e series)
+      (if (eq (car e) 'start)
+          ;; We assume chains have no overlapping entries, otherwise
+          ;; [s1 s2 e1 e2] will be treated as [s1 e1]
+          (aset entries-bitmap (nth 3 e) (or (aref entries-bitmap (nth 3 e)) e))
+        (aset entries-bitmap (nth 3 e) nil))
+      ;; Check if we are currently in intersection
+      (if (seq-every-p #'identity entries-bitmap)
+          ;; If so, start the interesection counter unless it's started
+          (unless current-intersection-start
+            (setq current-intersection-start (nth 1 e)))
+        ;; Then we aren't in intersection. We have to record the
+        ;; current interaction if there was one
+        (when current-intersection-start
+          (let ((data (cl-loop for i from 0
+                               for i-e across entries-bitmap
+                               ;; `entries-bitmap' will have all
+                               ;; active entires except one from the
+                               ;; recently ended chain
+                               if (= i (nth 3 e)) collect (nth 2 e)
+                               else collect (nth 2 i-e))))
+            (push
+             (list current-intersection-start (nth 1 e)
+                   (when merge-data-fn
+                     (apply merge-data-fn data)))
+             intersections))
+          (setq current-intersection-start nil))))
+    (seq-sort-by #'car #'< intersections)))
+
+(defun deterred-chains-group-by (chain date-format)
+  "Group CHAIN by DATE-FORMAT.
+
+Return a list of cons cells, where car is the date in DATE-FORMAT, and
+cdr is the total number of seconds in the group.
+
+For DATE-FORMAT, see `format-time-string'."
+  (mapcar
+   (lambda (group)
+     (cons (car group)
+           (seq-reduce (lambda (acc e)
+                         (+ acc (- (nth 1 e) (nth 0 e))))
+                       (cdr group)
+                       0)))
+   (seq-group-by
+    (lambda (e) (format-time-string date-format (car e)))
+    chain)))
 
 (provide 'deterred-chains)
 ;;; deterred-chains.el ends here

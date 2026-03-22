@@ -232,7 +232,7 @@ otherwise file paths relative to the top-most common directory."
                 (clocks (seq-uniq
                          (cl-mapcan
                           (lambda (h) (alist-get 'clocks h))
-                          (cdr group))
+                          (copy-tree (cdr group)))
                          (lambda (c1 c2)
                            (=
                             (alist-get :start c1)

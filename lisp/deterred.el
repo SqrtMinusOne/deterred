@@ -54,7 +54,6 @@
 (require 'deterred-messengers)
 (require 'deterred-mpd)
 (require 'deterred-mpd-emms)
-(require 'deterred-org)
 (require 'deterred-org-clock)
 (require 'deterred-org-journal-tags)
 (require 'deterred-org-roam)
