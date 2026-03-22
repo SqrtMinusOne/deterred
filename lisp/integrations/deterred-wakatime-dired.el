@@ -330,5 +330,23 @@ Related meaning stored under PATH or containing project root in PATH."
          (deterred-dashboard-wakatime))
      `((:projects . ,all-ids)))))
 
+;;;###autoload
+(defun deterred-wakatime-dired-dashboard-ai (paths)
+  "Open the Wakatime dashboard for PATHS."
+  (interactive
+   (list (or (dired-get-marked-files nil 'marked)
+             (list (directory-file-name
+                    (expand-file-name default-directory))))))
+  (let ((table (make-hash-table :test #'equal))
+        (all-ids))
+    (dolist (path paths)
+      (let ((ids (deterred-wakatime-dired--related-projects-id path)))
+        (dolist (id ids)
+          (puthash id t table))))
+    (maphash (lambda (id _v) (push id all-ids)) table)
+    (deterred-dashboard-open
+     (deterred-dashboard-ai)
+     `((:projects . ,all-ids)))))
+
 (provide 'deterred-wakatime-dired)
 ;;; deterred-wakatime-dired.el ends here

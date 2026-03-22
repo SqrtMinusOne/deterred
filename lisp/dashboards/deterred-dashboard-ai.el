@@ -27,8 +27,95 @@
 
 ;;; Code:
 (require 'deterred-dashboard)
+(require 'deterred-chains)
 (require 'deterred-db)
 (require 'deterred-utils)
+
+(defconst deterred-dashboard-ai-usage-normalize-timeout (* 15 60))
+
+(defun deterred-dashboard-ai--get-wakatime-overlap (db params)
+  "Calculate overlap between AI usage and WakaTime activity.
+
+DB is the SQLite database object, PARAMS is the dashboard parameters
+object.
+
+Return 3 datasets, each having three columns:
+- month / week / day
+- total_hours
+- ai_hours."
+  (when-let*
+      ((ai-usage-raw
+        (deterred-db-select-template-alist
+         db
+         "SELECT timestamp
+FROM ai_usage_item
+WHERE is_stats = 0
+  [[AND timestamp >= :start-date]]
+  [[AND timestamp <= :end-date]]
+  [[AND hostname IN :hostname]]
+  [[AND model_name IN :model]]"
+         params))
+       (ai-usage (car (deterred-chains-normalize
+                       (list
+                        (mapcar (lambda (e) (list (alist-get 'timestamp e) nil nil))
+                                ai-usage-raw))
+                       deterred-dashboard-ai-usage-normalize-timeout)))
+       (ai-usage-start (caar ai-usage))
+       (ai-usage-end (caar (last ai-usage)))
+       (wakatime-data-raw
+        (deterred-db-select-template-alist
+         db
+         "SELECT wi.start_timestamp, wi.end_timestamp
+FROM wakatime_item wi
+WHERE 1 = 1
+  [[AND wi.start_timestamp >= :start-date]]
+  [[AND wi.end_timestamp <= :end-date]]
+  [[AND wi.project_id IN :projects]]
+  [[AND wi.start_timestamp >= :ai-usage-start]]
+  [[AND wi.end_timestamp <= :ai-usage-end]]"
+         (append params `((:ai-usage-start . ,ai-usage-start)
+                          (:ai-usage-end . ,ai-usage-end)))))
+       (wakatime-data
+        (car (deterred-chains-normalize
+              (list
+               (mapcar (lambda (e)
+                         (list
+                          (alist-get 'start_timestamp e)
+                          (alist-get 'end_timestamp e)
+                          nil))
+                       wakatime-data-raw))
+              deterred-dashboard-ai-usage-normalize-timeout)))
+       (intersection-data
+        (deterred-chains-intersection
+         (list ai-usage wakatime-data))))
+    (list
+     (seq-sort-by
+      #'cdar #'string-lessp
+      (deterred-utils-cells-to-alists
+       (list
+        (deterred-chains-group-by wakatime-data "%Y-%m")
+        (deterred-chains-group-by intersection-data "%Y-%m"))
+       'month '(total_hours ai_hours)
+       (lambda (sec) (when sec
+                       (deterred-utils-round-to (/ (float sec) (* 60 60)) 2)))))
+     (seq-sort-by
+      #'cdar #'string-lessp
+      (deterred-utils-cells-to-alists
+       (list
+        (deterred-chains-group-by wakatime-data "%Y-%W")
+        (deterred-chains-group-by intersection-data "%Y-%W"))
+       'week '(total_hours ai_hours)
+       (lambda (sec) (when sec
+                       (deterred-utils-round-to (/ (float sec) (* 60 60)) 2)))))
+     (seq-sort-by
+      #'cdar #'string-lessp
+      (deterred-utils-cells-to-alists
+       (list
+        (deterred-chains-group-by wakatime-data "%Y-%m-%d")
+        (deterred-chains-group-by intersection-data "%Y-%m-%d"))
+       'day '(total_hours ai_hours)
+       (lambda (sec) (when sec
+                       (deterred-utils-round-to (/ (float sec) (* 60 60)) 2))))))))
 
 (defun deterred-dashboard-ai--format-tokens-column (data)
   "Format the `tokens' column in DATA for human display."
@@ -116,6 +203,9 @@ ORDER BY wp.name"))))
   '((numbers-data (name . "Summary numbers"))
     (top-models (name . "Top models"))
     (top-projects (name . "Top projects"))
+    (ai-usage-per-month (name . "AI usage per month"))
+    (ai-usage-per-week (name . "AI usage per week"))
+    (ai-usage-per-day (name . "AI usage per day"))
     (cost-by-model-per-day (name . "Cost by model per day"))
     (cost-by-model-per-week (name . "Cost by model per week"))
     (cost-by-model-per-month (name . "Cost by model per month"))
@@ -141,6 +231,7 @@ ORDER BY wp.name"))))
 
 PARAMS is as returned by `deterred-dashboard-default-params'."
   (let* ((db (deterred-db--init))
+         (ai-usage-datasets (deterred-dashboard-ai--get-wakatime-overlap db params))
          (numbers-data
           (deterred-db-select-template-alist
            db
@@ -240,6 +331,9 @@ GROUP BY i.project_id
 ORDER BY cost DESC
 LIMIT 30"
            params))
+      (ai-usage-per-month . ,(nth 0 ai-usage-datasets))
+      (ai-usage-per-week . ,(nth 1 ai-usage-datasets))
+      (ai-usage-per-day . ,(nth 2 ai-usage-datasets))
       (cost-by-model-per-day
        . ,(deterred-db-select-template-alist
            db
@@ -584,6 +678,98 @@ LIMIT 20"
     :max-rows 15
     :grid-button t)
    "\n"
+   (deterred-format (f-h2 "Programming time %") "\n"))
+  ;; Coding overlap charts
+  (deterred-dashboard-exec-python
+   :python-code
+   "from matplotlib import pyplot as plt
+from matplotlib.ticker import MaxNLocator
+from deterred import fig_to_b64
+
+import pandas as pd
+import json
+
+data = json.loads(input())
+df_month = pd.DataFrame(data.get('ai-usage-per-month', {}).get('data', []))
+df_week = pd.DataFrame(data.get('ai-usage-per-week', {}).get('data', []))
+df_day = pd.DataFrame(data.get('ai-usage-per-day', {}).get('data', []))
+
+images = []
+
+def prepare_df(df, index_column):
+    if df.empty:
+        return None
+
+    df_plot = df.copy()
+    df_plot['ai_hours'] = df_plot['ai_hours'].fillna(0)
+    df_plot['total_hours'] = df_plot['total_hours'].fillna(0)
+    df_plot['non_ai_hours'] = (df_plot['total_hours'] - df_plot['ai_hours']).clip(lower=0)
+    df_plot = df_plot[[index_column, 'ai_hours', 'non_ai_hours']]
+    return df_plot.set_index(index_column)
+
+def add_chart(df, title, ylabel, percentage=False, max_bins=None):
+    if df is None or df.empty:
+        images.append(None)
+        return
+
+    df_plot = df
+    if percentage:
+        totals = df_plot.sum(axis=1)
+        df_plot = df_plot.div(totals.where(totals != 0), axis=0).fillna(0) * 100
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    df_plot.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    if percentage:
+        ax.set_ylim(0, 100)
+    if max_bins and len(df_plot) > max_bins:
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=max_bins))
+    plt.xticks(rotation=45, ha='right')
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+
+df_month_plot = prepare_df(df_month, 'month')
+add_chart(df_month_plot, 'AI vs non-AI hours per month', 'Hours')
+add_chart(df_month_plot, 'AI vs non-AI share per month', '%', percentage=True)
+
+df_week_plot = prepare_df(df_week, 'week')
+add_chart(df_week_plot, 'AI vs non-AI hours per week', 'Hours', max_bins=30)
+add_chart(df_week_plot, 'AI vs non-AI share per week', '%', percentage=True, max_bins=30)
+
+df_day_plot = prepare_df(df_day, 'day')
+add_chart(df_day_plot, 'AI vs non-AI hours per day', 'Hours', max_bins=30)
+add_chart(df_day_plot, 'AI vs non-AI share per day', '%', percentage=True, max_bins=30)
+
+print(json.dumps(images))"
+   :input data
+   :on-success
+   (lambda (images)
+     (when (elt images 0)
+       (insert (deterred-format (f-h3 "AI vs non-AI hours per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 0))
+       (insert "\n"))
+     (when (elt images 1)
+       (insert (deterred-format (f-h3 "AI vs non-AI share per month") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 1))
+       (insert "\n"))
+     (when (elt images 2)
+       (insert (deterred-format (f-h3 "AI vs non-AI hours per week") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 2))
+       (insert "\n"))
+     (when (elt images 3)
+       (insert (deterred-format (f-h3 "AI vs non-AI share per week") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 3))
+       (insert "\n"))
+     (when (elt images 4)
+       (insert (deterred-format (f-h3 "AI vs non-AI hours per day") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 4))
+       (insert "\n"))
+     (when (elt images 5)
+       (insert (deterred-format (f-h3 "AI vs non-AI share per day") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 5))
+       (insert "\n"))))
+  (insert
    (deterred-format (f-h2 "Cost over time") "\n"))
   ;; Cost charts
   (deterred-dashboard-exec-python
