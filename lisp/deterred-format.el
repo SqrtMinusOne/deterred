@@ -107,9 +107,15 @@ specifiers are as follows:
 E.g. a->b.c[0]."
   (deterred-format--parse-accessor-expr accessor))
 
+(defun deterred-format--number-to-string-safe (item)
+  "If ITEM is number, return its string representation."
+  (if (numberp item)
+      (number-to-string item)
+    ""))
+
 (defconst deterred-format-alias-alist
   `((f-acc . deterred-format-accessor)
-    (f-num . number-to-string)
+    (f-num . deterred-format--number-to-string-safe)
     (f-join . string-join)))
 
 (defun deterred-format--process-expr-item (item)

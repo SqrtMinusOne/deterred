@@ -182,5 +182,63 @@ For DATE-FORMAT, see `format-time-string'."
     (lambda (e) (format-time-string date-format (car e)))
     chain)))
 
+(defun deterred-chains-discretize--ranges (chain timestamps &optional merge-data-fn)
+  "Discretize CHAIN by TIMESTAMPS.
+
+CHAIN is a list of elements like (<start> <end> <data>), where
+<start> and <end> are mandatory and <data> is optional.  TIMESTAMPS is
+a list of UNIX timestamps timestamps used as discretization boundaries.
+
+Do not assume TIMESTAMPS and CHAIN are sorted.  Assume CHAIN is
+non-overlapping though.
+
+Return a list of elements like (<start> <end> <data> <coef>) where
+<start> and <end> describe one discretization interval
+[<start>,<next-timestamp>), represented as <start> and
+<next-timestamp> - 1; <data> is the result of MERGE-DATA-FN applied to
+chain elements that overlap that interval; and <coef> is a number from
+0 to 1 showing what fraction of the interval is covered by CHAIN."
+  (let ((data (seq-sort
+               (lambda (e1 e2)
+                 (if (= (cadr e1) (cadr e2))
+                     (eq (car e1) 'interval)
+                   (< (cadr e1) (cadr e2))))
+               (append
+                (mapcar (lambda (e) (cons 'chain e)) chain)
+                (mapcar (lambda (e) (list 'interval e)) timestamps))))
+        current-interval current-chain-elems res)
+    (dolist (e data)
+      ;; If we're at an interval border
+      (if (eq (car e) 'interval)
+          ;; It may be our first interval, in which case we just start it and do nothing
+          (if (not current-interval)
+              (setq current-interval (cadr e))
+            ;; Otherwise, we have to add an element to res.
+            ;; I suppose I could've done it more efficienly but I'm
+            ;; writing this at 0.30am because I can't sleep T_T
+            (let* ((start current-interval)
+                   (end (1- (cadr e)))
+                   new-current-chain-elems
+                   (total 0))
+              ;; We iterate over all current chain elements which
+              ;; found themselves in the inverval, calculate the time
+              ;; they contributed, and leave only the elments that can
+              ;; contribute to the next interval
+              (dolist (elem current-chain-elems)
+                (cl-incf total
+                         (max (- (min end (caddr elem)) (max start (cadr elem))) 0))
+                (when (> (caddr elem) end)
+                  (push elem new-current-chain-elems)))
+              (push (list start end
+                          (when merge-data-fn
+                            (apply merge-data-fn current-chain-elems))
+                          (/ (float total) (- end start)))
+                    res)
+              (setq current-chain-elems (nreverse new-current-chain-elems))
+              (setq current-interval (cadr e))))
+        ;; Otherwise, if it's a chain element, we store it
+        (push e current-chain-elems)))
+    (nreverse res)))
+
 (provide 'deterred-chains)
 ;;; deterred-chains.el ends here
