@@ -31,6 +31,7 @@
 (require 'validate)
 (require 'backtrace)
 (require 'request)
+(require 'uuidgen)
 (require 'org)
 
 (require 'deterred-format)
