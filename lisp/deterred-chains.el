@@ -185,27 +185,21 @@ For DATE-FORMAT, see `format-time-string'."
 (defun deterred-chains-discretize--ranges (chain timestamps &optional merge-data-fn)
   "Discretize CHAIN by TIMESTAMPS.
 
-CHAIN is a list of elements like (<start> <end> <data>), where
-<start> and <end> are mandatory and <data> is optional.  TIMESTAMPS is
-a list of UNIX timestamps timestamps used as discretization boundaries.
-
-Do not assume TIMESTAMPS and CHAIN are sorted.  Assume CHAIN is
-non-overlapping though.
-
-Return a list of elements like (<start> <end> <data> <coef>) where
-<start> and <end> describe one discretization interval
-[<start>,<next-timestamp>), represented as <start> and
-<next-timestamp> - 1; <data> is the result of MERGE-DATA-FN applied to
-chain elements that overlap that interval; and <coef> is a number from
-0 to 1 showing what fraction of the interval is covered by CHAIN."
-  (let ((data (seq-sort
-               (lambda (e1 e2)
-                 (if (= (cadr e1) (cadr e2))
-                     (eq (car e1) 'interval)
-                   (< (cadr e1) (cadr e2))))
-               (append
-                (mapcar (lambda (e) (cons 'chain e)) chain)
-                (mapcar (lambda (e) (list 'interval e)) timestamps))))
+See `deterred-chains-discretize' for arguments description, including
+MERGE-DATA-FN."
+  (let ((data
+         ;; One would think it would be faster to assume TIMESTAMP and
+         ;; CHAIN are sorted a do a merge sort, but the built-in
+         ;; `sort' is actually faster than any merge sort algorithm I
+         ;; could write in elisp despite being asymptotically worse
+         (seq-sort
+          (lambda (e1 e2)
+            (if (= (cadr e1) (cadr e2))
+                (eq (car e1) 'interval)
+              (< (cadr e1) (cadr e2))))
+          (append
+           (mapcar (lambda (e) (cons 'chain e)) chain)
+           (mapcar (lambda (e) (list 'interval e)) timestamps))))
         current-interval current-chain-elems res)
     (dolist (e data)
       ;; If we're at an interval border
@@ -231,7 +225,7 @@ chain elements that overlap that interval; and <coef> is a number from
                   (push elem new-current-chain-elems)))
               (push (list start end
                           (when merge-data-fn
-                            (apply merge-data-fn current-chain-elems))
+                            (funcall merge-data-fn current-chain-elems))
                           (/ (float total) (- end start)))
                     res)
               (setq current-chain-elems (nreverse new-current-chain-elems))
@@ -239,6 +233,73 @@ chain elements that overlap that interval; and <coef> is a number from
         ;; Otherwise, if it's a chain element, we store it
         (push e current-chain-elems)))
     (nreverse res)))
+
+(defun deterred-chains-discretize--points (chain timestamps &optional merge-data-fn)
+  "Discretize CHAIN by TIMESTAMPS.
+
+See `deterred-chains-discretize' for arguments description, including
+MERGE-DATA-FN."
+  ;; See `deterred-chains-discretize--ranges' for comments, it's
+  ;; basically the same
+  (let ((data
+         (seq-sort
+          (lambda (e1 e2)
+            (if (= (cadr e1) (cadr e2))
+                (eq (car e1) 'interval)
+              (< (cadr e1) (cadr e2))))
+          (append
+           (mapcar (lambda (e) (cons 'chain e)) chain)
+           (mapcar (lambda (e) (list 'interval e)) timestamps))))
+        current-chain-elems (count 0) (max 0) current-interval res)
+    (dolist (e data)
+      (if (eq (car e) 'interval)
+          (if (not current-interval)
+              (setq current-interval (cadr e))
+            (let* ((start current-interval)
+                   (end (1- (cadr e))))
+              (push (list start end
+                          (when merge-data-fn
+                            (apply merge-data-fn current-chain-elems))
+                          count)
+                    res)
+              (setq current-chain-elems nil)
+              (setq count 0)
+              (setq current-interval (cadr e))))
+        (when current-interval
+          (push e current-chain-elems)
+          (cl-incf count)
+          (setq max (max max count)))))
+    (mapcar (lambda (e)
+              (list
+               (car e)
+               (cadr e)
+               (cadddr e)
+               (/ (float (cadddr e)) max)))
+            (nreverse res))))
+
+(defun deterred-chains-discretize (chain timestamps &optional merge-data-fn)
+  "Discretize CHAIN by TIMESTAMPS.
+
+CHAIN is a list of elements like (<start> <end> <data>), where
+<start> is mandatory, <end> must be either present or abscent in all
+elements, and <data> is optional.  TIMESTAMPS is a list of UNIX
+timestamps timestamps used as discretization boundaries.
+
+Do not assume TIMESTAMPS and CHAIN are sorted.
+
+Return a list of elements like (<start> <end> <data> <coef>) where
+<start> and <end> describe one discretization interval
+[<start>,<next-timestamp>), represented as <start> and
+<next-timestamp> - 1; <data> is the result of MERGE-DATA-FN applied to
+chain elements that overlap that interval; and <coef> is a number from
+0 to 1 showing how many CHAIN elements cover the interval.
+
+If CHAIN elements have <end>, <coef> means fraction of the interval
+covered by CHAIN.  Otherwise, <coef> is the number of elements in the
+interval normalized to 1."
+  (if (cadar chain)
+      (deterred-chains-discretize--ranges chain timestamps merge-data-fn)
+    (deterred-chains-discretize--points chain timestamps merge-data-fn)))
 
 (provide 'deterred-chains)
 ;;; deterred-chains.el ends here

@@ -355,5 +355,16 @@ If PROCESS-VALUES-FN is non-nil, call it for each value."
   (/ (fround (* (float value) (expt 10 n)))
      (expt 10 n)))
 
+(defun deterred-utils-merge-alists (alists &optional test-fn)
+  "Create a new alist from ALISTS.
+
+TEST-FN is used to deduplicate keys, the default is the same as in
+`alist-get'."
+  (let (res)
+    (dolist (alist alists)
+      (dolist (item alist)
+        (setf (alist-get (car item) res nil nil test-fn)
+              (cdr item))))))
+
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

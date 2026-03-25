@@ -142,6 +142,38 @@ to the start of day, e.g. use `deterred-utils-ts-to-day-start'.  DB is
 a SQLite connection objects."
   (deterred-source-range-summary source timestamp (+ (* 60 60 24) (- 1) timestamp) db))
 
+(cl-defgeneric deterred-source-events (source start end &optional params db)
+  "Return events from START to END.
+
+START and END are UNIX timestamps.  SOURCE is a `deterred-source'
+instance.  DB is a SQLite connection object.
+
+PARAMS is a parameter object from the source dashboard.
+
+Return a list of elements like (<start> <end> <data>), where <start>
+and <end> are UNIX timestamps, and <data> is an arbitrary object.
+<start> is mandatory, <end> must either be present on absent on all
+elements, <data> is required for use in
+`deterred-source-events-group'.")
+
+(cl-defmethod deterred-source-events ((_source deterred-source) _start _end &optional _params _db)
+  "A dummy impementation if `deterred-source-events'."
+  nil)
+
+(cl-defgeneric deterred-source-events-group (source events)
+  "Group EVENTS.
+
+EVENTS are the output of `deterred-source-events'.  SOURCE is a
+`deterred-source' instance.
+
+Return an alist, where the car is the group name, and cdr is the
+events found in this group.")
+
+(cl-defmethod deterred-source-events-group ((_source deterred-source) events)
+  "Group EVENTS by the third element, if present in the first event."
+  (when (caddar events)
+    (seq-group-by #'caddr events)))
+
 (defun deterred-source--actions-pick (action-table &optional callback)
   "Prompt the user with ACTION-TABLE and execute the pick.
 

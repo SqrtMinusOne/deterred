@@ -1333,5 +1333,26 @@ WHERE rowid NOT IN (
             )))
       (message "%s duplicates deleted" count))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-messengers) start end &optional params db)
+  "Return events for messages.
+
+See the generic method description for START, END and DB.  PARAMS are
+the same as in `deterred-dashboard-messengers'."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT mm.timestamp, null, mc.name
+FROM messenger_message mm
+INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+WHERE mm.timestamp BETWEEN :start AND :end
+    [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+    [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+    [[AND mc.type IN :chat-type]]
+    [[AND mc.name IN :chat-name]]
+    [[AND mm.messenger IN :messenger]]
+    [[AND mm.category IN :category]]"
+     (deterred-utils-merge-alists (list params `((:start . ,start) (:end . ,end)))))))
+
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here
