@@ -727,5 +727,41 @@ DB is the sqlite database object."
               (deterred-social--render-data
                mastodon-posts reddit-posts reddit-comments vk-posts twitter-posts)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-social) start end &optional _params db)
+  "Return social posting events for [START, END].
+
+The third event field is the social network name, so default grouping
+is by network.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (sqlite-select
+     db "SELECT timestamp, null, 'reddit'
+FROM reddit_post
+WHERE timestamp BETWEEN ? AND ?
+UNION ALL
+SELECT timestamp, null, 'reddit'
+FROM reddit_comment
+WHERE timestamp BETWEEN ? AND ?
+UNION ALL
+SELECT timestamp, null, 'mastodon'
+FROM mastodon_post
+WHERE timestamp BETWEEN ? AND ?
+UNION ALL
+SELECT timestamp, null, 'vk'
+FROM vk_post
+WHERE timestamp BETWEEN ? AND ?
+UNION ALL
+SELECT timestamp, null, 'twitter'
+FROM twitter_post
+WHERE timestamp BETWEEN ? AND ?
+ORDER BY 1"
+     (list start end
+           start end
+           start end
+           start end
+           start end))))
+
 (provide 'deterred-social)
 ;;; deterred-social.el ends here

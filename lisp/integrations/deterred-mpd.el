@@ -310,11 +310,40 @@ DB is the sqlite database object."
                   "\n\n"))
              "Top albums:\n"
              (f-mapconcat
-              (f "- " (f-acc "iter->'album") " ("
+             (f "- " (f-acc "iter->'album") " ("
                  (org-duration-from-minutes
                   (/ (f-acc "iter->'duration") 60.0))
                  ")")
               (seq-take time-by-album deterred-mpd-max-artists))))))))
+
+(cl-defmethod deterred-source-events
+  ((_source deterred-mpd) start end &optional params db)
+  "Return MPD listening intervals for [START, END].
+
+PARAMS may contain the same filters as the MPD dashboard, namely
+`:start-date', `:end-date', `:artist' and `:album'.  The third event
+field is the album artist, so default grouping is by artist.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT msl.timestamp, msl.timestamp + ms.duration, ms.album_artist
+FROM mpd_song_listened msl
+INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+WHERE msl.timestamp BETWEEN :start AND :end
+  [[AND msl.timestamp >= :start-date]]
+  [[AND msl.timestamp <= :end-date]]
+  [[AND ms.album_artist IN :artist]]
+  [[AND ms.album IN :album]]
+ORDER BY msl.timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-mpd "deterred-dashboard-mpd")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-mpd))
+  "Return the default dashboard for MPD."
+  (deterred-dashboard-mpd))
 
 (provide 'deterred-mpd)
 ;;; deterred-mpd.el ends here

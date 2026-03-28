@@ -885,5 +885,33 @@ DB is the sqlite database object."
                  " on " (f-acc "iter->'app"))
               app-data)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-activitywatch) start end &optional params db)
+  "Return not-AFK intervals for ActivityWatch in [START, END].
+
+PARAMS may contain the same filters as the ActivityWatch dashboard,
+namely `:start-date', `:end-date' and `:hostname'.  The third event
+field is the hostname, so default grouping is by hostname.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT notafk_start_timestamp, notafk_end_timestamp, hostname
+FROM activitywatch_notafk_period
+WHERE notafk_end_timestamp >= :start
+  AND notafk_start_timestamp <= :end
+  [[AND date(notafk_start_timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(notafk_start_timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND hostname IN :hostname]]
+ORDER BY notafk_start_timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-activitywatch "deterred-dashboard-activitywatch")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-activitywatch))
+  "Return the default dashboard for ActivityWatch."
+  (deterred-dashboard-activitywatch))
+
 (provide 'deterred-activitywatch)
 ;;; deterred-activitywatch.el ends here

@@ -441,5 +441,33 @@ DB is the sqlite database object."
          . ,(lambda (&rest _)
               (deterred-read-it-later--render-articles-by-host articles-by-host)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-read-it-later) start end &optional params db)
+  "Return read-it-later article events for [START, END].
+
+PARAMS may contain the same filters as the read-it-later dashboard,
+namely `:start-date', `:end-date', `:hosts' and `:providers'.  The
+third event field is the hostname, so default grouping is by host.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT rila.read_at, null, rila.host
+FROM read_it_later_article rila
+WHERE rila.read_at BETWEEN :start AND :end
+  [[AND rila.read_at >= :start-date]]
+  [[AND rila.read_at <= :end-date]]
+  [[AND rila.host IN :hosts]]
+  [[AND rila.provider IN :providers]]
+ORDER BY rila.read_at"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-read-it-later "deterred-dashboard-read-it-later")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-read-it-later))
+  "Return the default dashboard for read-it-later."
+  (deterred-dashboard-read-it-later))
+
 (provide 'deterred-read-it-later)
 ;;; deterred-read-it-later.el ends here

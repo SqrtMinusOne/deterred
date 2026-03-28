@@ -178,5 +178,22 @@ DB is the sqlite database object."
                  "%)")
               habit-data)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-habits) start end &optional _params db)
+  "Return org-habit completion timestamps for [START, END].
+
+The returned events have no grouping key, so the default timeline
+grouping is disabled.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (sqlite-select
+     db
+     "SELECT timestamp, null
+FROM habit_record
+WHERE timestamp BETWEEN ? AND ?
+ORDER BY timestamp"
+     (list start end))))
+
 (provide 'deterred-habits)
 ;;; deterred-habits.el ends here

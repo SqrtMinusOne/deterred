@@ -745,5 +745,35 @@ DB is the sqlite database object."
                 total-data
                 "\n"))))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-wakatime) start end &optional params db)
+  "Return WakaTime coding intervals for [START, END].
+
+This uses `wakatime_item'.  PARAMS may contain the same filters as the
+WakaTime dashboard, namely `:start-date', `:end-date' and
+`:projects'.  The third event field is the project name, so default
+grouping is by project.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT wi.start_timestamp, NULL, COALESCE(wp.name, 'Unknown Project')
+FROM wakatime_item wi
+LEFT JOIN wakatime_projects wp ON wp.id = wi.project_id
+WHERE wi.end_timestamp >= :start
+  AND wi.start_timestamp <= :end
+  [[AND wi.start_timestamp >= :start-date]]
+  [[AND wi.end_timestamp <= :end-date]]
+  [[AND wi.project_id IN :projects]]
+ORDER BY wi.start_timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-wakatime "deterred-dashboard-wakatime")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-wakatime))
+  "Return the default dashboard for WakaTime."
+  (deterred-dashboard-wakatime))
+
 (provide 'deterred-wakatime)
 ;;; deterred-wakatime.el ends here

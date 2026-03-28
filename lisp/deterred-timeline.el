@@ -46,7 +46,7 @@
   :group 'deterred
   :type 'string)
 
-(defcustom deterred-timeline-max-prefix-length 20
+(defcustom deterred-timeline-max-prefix-length 30
   "Maximum prefix length for timelines."
   :group 'deterred
   :type 'integer)
@@ -447,8 +447,7 @@ This is ugly but it works..."
                        db)))
             (setf (alist-get source deterred-timeline-data) data)
             (deterred-timeline--render-source-data
-             source data deterred-timeline-max-prefix-length)
-            (insert "\n"))))
+             source data deterred-timeline-max-prefix-length))))
       (setq deterred-timeline-results-loc (cons region-start (point-marker))))
     (let ((magit-section-cache-visibility nil))
       (magit-section-show magit-root-section))))
@@ -461,7 +460,7 @@ This is ugly but it works..."
     (display-buffer-full-frame buffer nil)
     (with-current-buffer buffer
       ;; Copy list
-      (setq-local deterred-timeline-sources `(,@deterred-sources))
+      (setq-local deterred-timeline-sources (copy-sequence deterred-sources))
       (deterred-timeline--render))))
 
 (provide 'deterred-timeline)

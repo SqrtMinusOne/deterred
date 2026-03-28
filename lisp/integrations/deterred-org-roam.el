@@ -528,5 +528,39 @@ DB is the sqlite database object."
                   (insert (deterred-org-roam--render-nodes deleted-nodes))
                   (insert "\n")))))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-org-roam) start end &optional params db)
+  "Return org-roam node modification timestamps for [START, END].
+
+PARAMS may contain the same filters as the Org Roam dashboard, namely
+`:start-date', `:end-date' and `:tag'.  The returned events have no
+grouping key, so the default timeline grouping is disabled.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT ornm.timestamp, null
+FROM org_roam_node_modification ornm
+INNER JOIN org_roam_node orn ON orn.id = ornm.node_id
+WHERE ornm.timestamp BETWEEN :start AND :end
+  [[AND ornm.timestamp >= :start-date]]
+  [[AND ornm.timestamp <= :end-date]]
+  [[AND EXISTS (
+    SELECT 1
+    FROM org_roam_node_tag ornt
+    WHERE ornt.node_id = orn.id
+      AND ornt.tag = :tag
+      AND ornt.timestamp_deleted IS NULL
+  )]]
+ORDER BY ornm.timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-org-roam "deterred-dashboard-org-roam")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-org-roam))
+  "Return the default dashboard for org-roam."
+  (deterred-dashboard-org-roam))
+
 (provide 'deterred-org-roam)
 ;;; deterred-org-roam.el ends here

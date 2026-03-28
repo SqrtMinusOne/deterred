@@ -224,5 +224,38 @@ A ref is an instance of `org-journal-tag-reference'."
         (:long-description-fn
          . ,(lambda (&rest _) (deterred-org-journal-tags--render-refs-by-days refs)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-org-journal-tags) start end &optional params db)
+  "Return org-journal record timestamps for [START, END].
+
+PARAMS may contain the same filters as the org-journal-tags
+dashboard, namely `:start-date', `:end-date' and `:tags'.  The
+returned events have no grouping key, so the default timeline
+grouping is disabled.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT timestamp, null
+FROM org_journal_record
+WHERE timestamp BETWEEN :start AND :end
+  [[AND timestamp >= :start-date]]
+  [[AND timestamp <= :end-date]]
+  [[AND id IN (
+    SELECT record_id
+    FROM org_journal_record_tag
+    INNER JOIN org_journal_tag ON org_journal_tag.id = org_journal_record_tag.tag_id
+    WHERE org_journal_tag.name IN :tags
+  )]]
+ORDER BY timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-org-journal-tags "deterred-dashboard-org-journal-tags")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-org-journal-tags))
+  "Return the default dashboard for org-journal-tags."
+  (deterred-dashboard-org-journal-tags))
+
 (provide 'deterred-org-journal-tags)
 ;;; deterred-org-journal-tags.el ends here

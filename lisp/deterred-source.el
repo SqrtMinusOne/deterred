@@ -186,7 +186,7 @@ color different groups in timeline.")
   "Get a stable color for SOURCE that remains visible on the default background."
   (let* ((base-color (format "#%s" (substring (md5 (oref source name)) 0 6)))
          (background (or (face-background 'default nil t) "#ffffff")))
-    (ct-contrast-min base-color background 2.5)))
+    (ct-contrast-min base-color background 3.5)))
 
 (cl-defgeneric deterred-source-default-dashboard (source)
   "Return a default dashboard for SOURCE.")

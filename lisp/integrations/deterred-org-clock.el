@@ -482,5 +482,32 @@ DB is the sqlite database object."
          . ,(lambda (&rest _)
               (deterred-org-clock--render-headlines rendered-headlines)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-org-clock) start end &optional _params db)
+  "Return Org Clock intervals for [START, END].
+
+The third event field is the task title, so default grouping is by
+task.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (mapcar
+     (lambda (item)
+       (list (alist-get 'start_timestamp item)
+             (alist-get 'end_timestamp item)
+             (alist-get 'title item)))
+     (deterred-db-select-alist
+      db "SELECT oci.start_timestamp,
+                 oci.end_timestamp,
+                 oh.title,
+                 oh.file_name,
+                 oh.headline_path
+          FROM org_clock_item oci
+          INNER JOIN org_headline oh ON oh.id = oci.headline_id
+          WHERE oci.end_timestamp >= ?
+            AND oci.start_timestamp <= ?
+          ORDER BY oci.start_timestamp"
+      (list start end)))))
+
 (provide 'deterred-org-clock)
 ;;; deterred-org-clock.el ends here

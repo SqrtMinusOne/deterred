@@ -464,10 +464,36 @@ DB is the sqlite database object."
          . ,(deterred-format
              "Transport trips: \n"
              (f-mapconcat
-              (f "- " (f-acc "iter->'transport") ": "
+             (f "- " (f-acc "iter->'transport") ": "
                  (f-num (alist-get 'count iter)))
               by-transport-data
               "\n")))))))
+
+(cl-defmethod deterred-source-events
+  ((_source deterred-transport) start end &optional params db)
+  "Return transport trip events for [START, END].
+
+PARAMS may contain the same filters as the transport dashboard,
+namely `:start-date' and `:end-date'.  The third event field is the
+transport type, so default grouping is by transport type.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT timestamp, null, transport
+FROM transport_trips
+WHERE timestamp BETWEEN :start AND :end
+  [[AND timestamp >= :start-date]]
+  [[AND timestamp <= :end-date]]
+ORDER BY timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-transport "deterred-dashboard-transport")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-transport))
+  "Return the default dashboard for transport."
+  (deterred-dashboard-transport))
 
 (provide 'deterred-transport)
 ;;; deterred-transport.el ends here

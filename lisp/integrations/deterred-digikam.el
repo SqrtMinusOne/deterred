@@ -299,5 +299,35 @@ DB is the sqlite database object."
              (f-button "(Show all)"
                        #'deterred-digikam--show-gallery-everywhere)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-digikam) start end &optional params db)
+  "Return digiKam photo timestamps for [START, END].
+
+PARAMS may contain the same filters as the digiKam dashboard, namely
+`:start-date', `:end-date', `:cameras', `:albums' and `:locations'.
+The returned events have no grouping key, so the default timeline
+grouping is disabled.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT pwl.timestamp, null
+FROM digikam_photo_with_location pwl
+WHERE pwl.timestamp BETWEEN :start AND :end
+  [[AND pwl.timestamp >= :start-date]]
+  [[AND pwl.timestamp <= :end-date]]
+  [[AND pwl.camera IN :cameras]]
+  [[AND pwl.album_id IN :albums]]
+  [[AND pwl.location_id IN :locations]]
+ORDER BY pwl.timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-digikam "deterred-dashboard-digikam")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-digikam))
+  "Return the default dashboard for digiKam."
+  (deterred-dashboard-digikam))
+
 (provide 'deterred-digikam)
 ;;; deterred-digikam.el ends here

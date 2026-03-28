@@ -1190,5 +1190,37 @@ DB is the sqlite database object."
                        (alist-get 'total_tokens iter)) " tokens")
               model-data)))))))
 
+(cl-defmethod deterred-source-events
+  ((_source deterred-ai-usage) start end &optional params db)
+  "Return AI usage message events for [START, END].
+
+PARAMS may contain the same filters as the AI dashboard, namely
+`:start-date', `:end-date', `:hostname', `:model' and `:projects'.
+The third event field is the project name, so default grouping is by
+project.
+
+DB is the sqlite database object."
+  (let ((db (or db (deterred-db--init))))
+    (deterred-db-select-template
+     db
+     "SELECT ai.timestamp, null, COALESCE(wp.name, '(No project)')
+FROM ai_usage_item ai
+LEFT JOIN wakatime_projects wp ON wp.id = ai.project_id
+WHERE ai.is_stats = 0
+  AND ai.timestamp BETWEEN :start AND :end
+  [[AND ai.timestamp >= :start-date]]
+  [[AND ai.timestamp <= :end-date]]
+  [[AND ai.hostname IN :hostname]]
+  [[AND ai.model_name IN :model]]
+  [[AND ai.project_id IN :projects]]
+ORDER BY ai.timestamp"
+     (append params `((:start . ,start) (:end . ,end))))))
+
+(declare-function deterred-dashboard-ai "deterred-dashboard-ai")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-ai-usage))
+  "Return the default dashboard for AI usage."
+  (deterred-dashboard-ai))
+
 (provide 'deterred-ai)
 ;;; deterred-ai.el ends here
