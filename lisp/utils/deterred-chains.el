@@ -273,7 +273,7 @@ MERGE-DATA-FN."
               (list
                (car e)
                (cadr e)
-               (cadddr e)
+               (caddr e)
                (/ (float (cadddr e)) max)))
             (nreverse res))))
 

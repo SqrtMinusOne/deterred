@@ -365,7 +365,8 @@ TEST-FN is used to deduplicate keys, the default is the same as in
     (dolist (alist alists)
       (dolist (item alist)
         (setf (alist-get (car item) res nil nil test-fn)
-              (cdr item))))))
+              (cdr item))))
+    (nreverse res)))
 
 (provide 'deterred-utils)
 ;;; deterred-utils.el ends here

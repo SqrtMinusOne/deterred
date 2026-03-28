@@ -204,6 +204,7 @@ If TIMESTAMP is nil, use the current time.")
     (minutes-15 . ,(deterred-interval-minute :unit 'minute :step 15 :display-name "15 Minutes"))
     (minutes-20 . ,(deterred-interval-minute :unit 'minute :step 20 :display-name "20 Minutes"))
     (minutes-30 . ,(deterred-interval-minute :unit 'minute :step 30 :display-name "30 Minutes"))
+    (hour . ,(deterred-interval-hour :unit 'hour :step 1 :display-name "Hour"))
     (hours-2 . ,(deterred-interval-hour :unit 'hour :step 2 :display-name "2 Hours"))
     (hours-4 . ,(deterred-interval-hour :unit 'hour :step 4 :display-name "4 Hours"))
     (hours-8 . ,(deterred-interval-hour :unit 'hour :step 8 :display-name "8 Hours"))
@@ -218,8 +219,10 @@ If TIMESTAMP is nil, use the current time.")
   "Return interval boundary timestamps from START to END.
 
 The result contains the start of each KIND interval that overlaps the
-requested range.  KIND is a key in `deterred-intervals'."
-  (let ((int (alist-get kind deterred-intervals)))
+requested range.  KIND either an instance of `deterred-interval' or
+key in `deterred-intevals'."
+  (let ((int (if (deterred-interval-p kind) kind
+               (alist-get kind deterred-intervals))))
     (unless int
       (error "Unknown interval: %s" kind))
     (let* ((start (deterred-interval-start int start))
