@@ -41,6 +41,7 @@
 
 ;;; Code:
 (require 'eieio)
+(require 'ct)
 
 (defcustom deterred-sources nil
   "DETERRED sources list."
@@ -173,6 +174,26 @@ events found in this group.")
   "Group EVENTS by the third element, if present in the first event."
   (when (caddar events)
     (seq-group-by #'caddr events)))
+
+(cl-defgeneric deterred-source-color (source &optional events)
+  "Return base color for SOURCE.
+
+SOURCE is a `deterred-source' instance.  If EVENTS are passed, they
+are produced by `deterred-source-events-group'.  This may be used to
+color different groups in timeline.")
+
+(cl-defmethod deterred-source-color ((source deterred-source) &optional _events)
+  "Get a stable color for SOURCE that remains visible on the default background."
+  (let* ((base-color (format "#%s" (substring (md5 (oref source name)) 0 6)))
+         (background (or (face-background 'default nil t) "#ffffff")))
+    (ct-contrast-min base-color background 2.5)))
+
+(cl-defgeneric deterred-source-default-dashboard (source)
+  "Return a default dashboard for SOURCE.")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-source))
+  "Return nil."
+  nil)
 
 (defun deterred-source--actions-pick (action-table &optional callback)
   "Prompt the user with ACTION-TABLE and execute the pick.

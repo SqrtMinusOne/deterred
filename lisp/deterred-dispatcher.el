@@ -34,6 +34,7 @@
 (require 'deterred-db)
 (require 'deterred-sync)
 (require 'deterred-dashboard)
+(require 'deterred-timeline)
 (require 'deterred-faces)
 (require 'deterred-source)
 (require 'deterred-utils)
@@ -67,6 +68,12 @@
 
 (defcustom deterred-dispatcher-date-time-format "%A, %Y-%m-%d %H:%M"
   "Format string for date+time entries."
+  :type '(choice
+          (string :tag "String")
+          (function :tag "Function")))
+
+(defcustom deterred-dispatcher-short-date-time-format "%Y-%m-%d %H:%M"
+  "Format string for date+time entries.  Should always be the same length."
   :type '(choice
           (string :tag "String")
           (function :tag "Function")))
@@ -573,6 +580,11 @@ DB is the SQLite connection object."
                  :notify (lambda (&rest _)
                            (call-interactively #'deterred-dispatcher-range))
                  "[View range...]")
+  (insert " ")
+  (widget-create 'push-button
+                 :notify (lambda (&rest _)
+                           (call-interactively #'deterred-timeline))
+                 "[Timeline]")
   (insert " ")
   (widget-create 'push-button
                  :notify (lambda (&rest _)

@@ -5,7 +5,7 @@
 ;; Author: Korytov Pavel <thexcloud@gmail.com>
 ;; Maintainer: Korytov Pavel <thexcloud@gmail.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (request "0.3.2") (validate "1.0.4") (magit-section "4.3.6") (org "9.6.6") (llm "0.29.0"))
+;; Package-Requires: ((emacs "29") (uuidgen "1.3") (libmpdel "2.0") (pcsv "1.4.0") (request "0.3.2") (validate "1.0.4") (magit-section "4.3.6") (org "9.6.6") (llm "0.29.0") (ct "0.3"))
 ;; Homepage: https://github.com/SqrtMinusOne/deterred.el
 
 ;; This file is NOT part of GNU Emacs.
@@ -29,20 +29,22 @@
 
 ;;; Code:
 ;; Utilities
-(require 'deterred-faces)
 (require 'deterred-chains)
+(require 'deterred-faces)
 (require 'deterred-format)
+(require 'deterred-grid)
+(require 'deterred-intervals)
 (require 'deterred-utils)
 
 ;; Core logic
 (require 'deterred-source)
 (require 'deterred-db)
 (require 'deterred-backup)
-(require 'deterred-grid)
 (require 'deterred-dashboard)
 (require 'deterred-dispatcher)
 (require 'deterred-source)
 
+;; Sources
 (require 'deterred-activitywatch)
 (require 'deterred-ai)
 (require 'deterred-digikam)
@@ -63,6 +65,37 @@
 (require 'deterred-transport)
 (require 'deterred-wakatime-dired)
 (require 'deterred-wakatime)
+
+;; Dashboards
+(require 'deterred-dashboard-activitywatch)
+(require 'deterred-dashboard-ai)
+(require 'deterred-dashboard-digikam)
+(require 'deterred-dashboard-dummy)
+(require 'deterred-dashboard-hledger)
+(require 'deterred-dashboard-messengers)
+(require 'deterred-dashboard-mpd)
+(require 'deterred-dashboard-org-journal-tags)
+(require 'deterred-dashboard-org-roam)
+(require 'deterred-dashboard-podcasts)
+(require 'deterred-dashboard-read-it-later)
+(require 'deterred-dashboard-transport)
+(require 'deterred-dashboard-wakatime)
+
+(setq deterred-dashboards
+      (list
+       ;; (deterred-dashboard-dummy)
+       (deterred-dashboard-activitywatch)
+       (deterred-dashboard-ai)
+       (deterred-dashboard-digikam)
+       (deterred-dashboard-hledger)
+       (deterred-dashboard-messengers)
+       (deterred-dashboard-mpd)
+       (deterred-dashboard-org-journal-tags)
+       (deterred-dashboard-org-roam)
+       (deterred-dashboard-podcasts)
+       (deterred-dashboard-read-it-later)
+       (deterred-dashboard-transport)
+       (deterred-dashboard-wakatime)))
 
 (defgroup deterred nil
   "Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard."

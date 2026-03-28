@@ -1354,5 +1354,11 @@ WHERE mm.timestamp BETWEEN :start AND :end
     [[AND mm.category IN :category]]"
      (deterred-utils-merge-alists (list params `((:start . ,start) (:end . ,end)))))))
 
+(declare-function deterred-dashboard-messengers "deterred-dashboard-messengers")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-messengers))
+  "Return the default dashboard for the messengers source."
+  (deterred-dashboard-messengers))
+
 (provide 'deterred-messengers)
 ;;; deterred-messengers.el ends here

@@ -42,10 +42,10 @@
 
 (declare-function evil-define-key* "evil-core")
 
-(defcustom deterred-dashboards nil
-  "List of DETERRED dashboard objects."
-  :type 'list
-  :group 'deterred)
+(defvar deterred-dashboards nil
+  "List of DETERRED dashboard objects.
+
+This is configured in deterred.el.")
 
 (defcustom deterred-dashboard-python (or
                                       (executable-find "python3")
@@ -272,38 +272,6 @@ PARAMS is the parameters, DATA is data as returned by
        deterred-dashboard-current
        deterred-dashboard-params data))))
 
-(defun deterred-dashboard-maybe-init ()
-  "Initialize `deterred-dashboards' with default dashboards if nil."
-  (unless deterred-dashboards
-    (require 'deterred-dashboard-dummy)
-    (require 'deterred-dashboard-mpd)
-    (require 'deterred-dashboard-podcasts)
-    (require 'deterred-dashboard-wakatime)
-    (require 'deterred-dashboard-activitywatch)
-    (require 'deterred-dashboard-read-it-later)
-    (require 'deterred-dashboard-digikam)
-    (require 'deterred-dashboard-messengers)
-    (require 'deterred-dashboard-org-journal-tags)
-    (require 'deterred-dashboard-org-roam)
-    (require 'deterred-dashboard-hledger)
-    (require 'deterred-dashboard-transport)
-    (require 'deterred-dashboard-ai)
-
-    (setq deterred-dashboards
-          (list (deterred-dashboard-dummy)
-                (deterred-dashboard-mpd)
-                (deterred-dashboard-podcasts)
-                (deterred-dashboard-wakatime)
-                (deterred-dashboard-activitywatch)
-                (deterred-dashboard-read-it-later)
-                (deterred-dashboard-digikam)
-                (deterred-dashboard-messengers)
-                (deterred-dashboard-org-journal-tags)
-                (deterred-dashboard-org-roam)
-                (deterred-dashboard-hledger)
-                (deterred-dashboard-transport)
-                (deterred-dashboard-ai)))))
-
 ;;;###autoload
 (defun deterred-dashboard-open (dashboard &optional override-params)
   "Open a DETERRED dashboard.
@@ -313,7 +281,6 @@ object."
   (interactive
    (list
     (progn
-      (deterred-dashboard-maybe-init)
       (let ((dashboards-by-name
              (mapcar
               (lambda (dashboard)
@@ -355,11 +322,16 @@ object."
              (error ,(format "The `%s' argument is required" (symbol-name s)))))
         symbols)))
 
-(cl-defmacro deterred-dashboard-widget-number (&key name key (size 20))
+(defconst deterred-dashboard-default-params-place 'deterred-dashboard-params
+  "Where to put parameters by default.")
+
+(cl-defmacro deterred-dashboard-widget-number
+    (&key name key (size 20) (place deterred-dashboard-default-params-place))
   "A widget to edit a number.
 
-NAME is the displayed name, KEY is the key in
-`deterred-dashboard-params'.  The stored value is a number or nil.
+NAME is the displayed name, KEY is the key in PLACE, which is
+`deterred-dashboard-params' by default.  The stored value is a number
+or nil.
 
 SIZE is the size of field."
   (deterred-dashboard--require-arguments name key)
@@ -368,13 +340,13 @@ SIZE is the size of field."
     :size ,size
     :format (deterred-format (f-ace (f ,name ": ") 'widget-button)
                              "%v   ")
-    :value (let ((val (alist-get ,key deterred-dashboard-params)))
+    :value (let ((val (alist-get ,key ,place)))
              (when (numberp val)
                (number-to-string val)))
     :notify (lambda (widget &rest _)
               (let ((var (widget-value widget)))
                 (setf
-                 (alist-get ,key deterred-dashboard-params)
+                 (alist-get ,key ,place)
                  (if (string-empty-p var) nil
                    (string-to-number var)))))))
 
@@ -389,17 +361,19 @@ SIZE is the size of field."
      (deterred-format
       "=> "
       (f-ace (if timestamp
-                 (format-time-string deterred-dispatcher-date-format timestamp)
+                 (format-time-string deterred-dispatcher-date-time-format timestamp)
                "(no date)")
              'deterred-faces-date)))))
 
 (cl-defmacro deterred-dashboard-widget-date
-    (&key name key (size 20) kind display-date)
+    (&key name key (size 20) kind display-date
+          (place deterred-dashboard-default-params-place))
   "A widget to edit a date like `org-read-date'.
 
-NAME is the displayed name, KEY is the key in
-`deterred-dashboard-params'.  The stored value is either a UNIX
-timestamp or nil.
+
+NAME is the displayed name, KEY is the key in PLACE, which is
+`deterred-dashboard-params' by default.  The stored value is either a
+UNIX timestamp or nil.
 
 SIZE is the size of the field.  If KIND is \"from\", ensure that the
 timestamp is the start of the day; if it's \"to\", ensure it's the end
@@ -414,7 +388,7 @@ using an overlay, like `org-read-date'."
            :size  ,size
            :format (deterred-format (f-ace (f ,name ": ") 'widget-button)
                                     "%v   ")
-           :value (let ((val (alist-get ,key deterred-dashboard-params)))
+           :value (let ((val (alist-get ,key ,place)))
                     (if (numberp val)
                         (format-time-string "%Y-%m-%d" val)
                       ""))
@@ -422,32 +396,32 @@ using an overlay, like `org-read-date'."
                      (let* ((var (widget-value widget))
                             (timestamp (deterred-utils-read-date var ,kind)))
                        (setf
-                        (alist-get ,key deterred-dashboard-params)
+                        (alist-get ,key ,place)
                         timestamp)
                        ,@(when display-date
                            `((deterred-dashboard--update-date-overlay
                               widget timestamp))))))))
      ,@(when display-date
          `((deterred-dashboard--update-date-overlay
-            widget (alist-get ,key deterred-dashboard-params))))))
+            widget (alist-get ,key ,place))))))
 
 (cl-defmacro deterred-dashboard-widget-checkbox
-    (&key name key)
+    (&key name key (place deterred-dashboard-default-params-place))
   "A widget to edit a boolean value.
 
-NAME is the displayed name, KEY is the key in
+NAME is the displayed name, KEY is the key in PLACE, which is
 `deterred-dashboard-params'.  The stored value is either t or nil."
   (deterred-dashboard--require-arguments name key)
   `(progn
      (insert (propertize ,name 'face 'widget-button) ": ")
      (widget-create
       'checkbox
-      :value (let ((val (alist-get ,key deterred-dashboard-params)))
+      :value (let ((val (alist-get ,key ,place)))
                val)
       :notify (lambda (widget &rest _)
                 (let* ((var (widget-value widget)))
                   (setf
-                   (alist-get ,key deterred-dashboard-params)
+                   (alist-get ,key ,place)
                    var))))))
 
 (defun deterred-dashboard--process-completing-read (selected options)
@@ -505,11 +479,14 @@ If OPTIONS is an alist, return the value corresponding to SELECTED."
         (widget-put widget 'value-overlay ov)))))
 
 (cl-defmacro deterred-dashboard-widget-completing-read
-    (&key name key options (prompt "Select: "))
+    (&key name key options (prompt "Select: ")
+          (place deterred-dashboard-default-params-place))
   "A widget to select a value from OPTIONS with `completing-read'.
 
-NAME is the displayed name, KEY is the key in
-`deterred-dashboard-params'.  OPTIONS can be a list of symbols, a list
+NAME is the displayed name, KEY is the key in PLACE, which is
+`deterred-dashboard-params' by default.
+
+OPTIONS can be a list of symbols, a list
 of strings, or an alist with symbols or strings as keys.
 
 PROMPT is passed to `completing-read'."
@@ -526,19 +503,22 @@ PROMPT is passed to `completing-read'."
                        (value (deterred-dashboard--process-completing-read
                                selected ,options)))
                   (deterred-dashboard--widget-render-option widget selected)
-                  (setf (alist-get ,key deterred-dashboard-params)
+                  (setf (alist-get ,key ,place)
                         value)))
               ,name)))
        (insert " ")
        (deterred-dashboard--widget-render-option
-        widget (alist-get ,key deterred-dashboard-params)))))
+        widget (alist-get ,key ,place)))))
 
 (cl-defmacro deterred-dashboard-widget-completing-read-multiple
-    (&key name key options (prompt "Select: ") (separator ";"))
+    (&key name key options (prompt "Select: ") (separator ";")
+          (place deterred-dashboard-default-params-place))
   "A widget to select values with `completing-read-multiple'.
 
-NAME is the displayed name, KEY is the key in
-`deterred-dashboard-params'.  OPTIONS can be a list of symbols, a list
+NAME is the displayed name, KEY is the key in PLACE, which is
+`deterred-dashboard-params' by default.
+
+OPTIONS can be a list of symbols, a list
 of strings, or an alist with symbols or strings as keys.
 
 PROMPT is passed to `completing-read', SEPARATOR is bound to
@@ -557,17 +537,17 @@ PROMPT is passed to `completing-read', SEPARATOR is bound to
                                   ,prompt ,options nil nil
                                   (when current-prefix-arg
                                     (string-join
-                                     (alist-get ,key deterred-dashboard-params)
+                                     (alist-get ,key ,place)
                                      crm-separator))))
                        (value (deterred-dashboard--process-completing-read
                                selected ,options)))
                   (deterred-dashboard--widget-render-option widget selected)
-                  (setf (alist-get ,key deterred-dashboard-params)
+                  (setf (alist-get ,key ,place)
                         value)))
               ,name)))
        (insert " ")
        (deterred-dashboard--widget-render-option
-        widget (alist-get ,key deterred-dashboard-params)))))
+        widget (alist-get ,key ,place)))))
 
 (defun deterred-dashboard--print-error (desc err output)
   "Format an error for dashboard.
