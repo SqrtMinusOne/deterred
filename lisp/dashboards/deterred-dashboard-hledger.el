@@ -88,11 +88,13 @@ This makes sense for the following commands:
   (deterred-dashboard-widget-date
    :name "Start date"
    :key :start-date
+   :kind 'from
    :display-date t)
   (insert "\n")
   (deterred-dashboard-widget-date
    :name "End date"
    :key :end-date
+   :kind 'to
    :display-date t)
   (insert "\n")
   (deterred-dashboard-widget-completing-read-multiple
