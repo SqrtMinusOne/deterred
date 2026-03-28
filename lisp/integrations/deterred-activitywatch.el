@@ -42,14 +42,16 @@
 ;;   only supports JSON import)
 
 ;;; Code:
+(require 'request)
+(require 'org-duration)
+(require 'iso8601)
+(require 'cl-lib)
+
 (require 'deterred-db)
 (require 'deterred-locations)
 (require 'deterred-source)
 (require 'deterred-format)
 (require 'deterred-utils)
-(require 'request)
-(require 'org-duration)
-(require 'cl-lib)
 
 (defconst deterred-activitywatch-uuid-namespace
   "6c4ea183-e81a-4e9d-bffc-11ed5aacb130")

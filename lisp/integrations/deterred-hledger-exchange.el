@@ -27,6 +27,7 @@
 
 ;;; Code:
 (require 'request)
+(require 'dom)
 
 (require 'deterred-format)
 (require 'deterred-hledger)
