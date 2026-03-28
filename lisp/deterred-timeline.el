@@ -41,7 +41,7 @@
 (defconst deterred-timeline-max-length 400
   "Maximum timeline length.")
 
-(defcustom deterred-timeline-symbol "■"
+(defcustom deterred-timeline-symbol "█"
   "A symbol to render timelines."
   :group 'deterred
   :type 'string)
@@ -114,13 +114,14 @@ C1 and C2 are hex RGS strings, VAL is a number between 0 and 1."
 BASE-COLOR is the color for COEF = 1, BACKGROUND is background color
 from which elements with COEF = 0 should be indistinguishable."
   (if (> coef 0)
-      (progn
-        (unless background
-          (setq background (or (face-background 'default nil t) "#ffffff")))
-        (propertize deterred-timeline-symbol
-                    'face `(:foreground
-                            ,(deterred-timeline--blend-colors
-                              background base-color coef))))
+      (propertize
+       deterred-timeline-symbol
+       'face `(:foreground
+               ,(deterred-timeline--blend-colors
+                 (or background
+                     (face-background 'default nil t)
+                     "#ffffff")
+                 base-color coef)))
     " "))
 
 (defun deterred-timeline--make-chain (chain-d base-color &optional background)
