@@ -41,7 +41,7 @@
 (defconst deterred-timeline-max-length 400
   "Maximum timeline length.")
 
-(defcustom deterred-timeline-symbol "█"
+(defcustom deterred-timeline-symbol "■"
   "A symbol to render timelines."
   :group 'deterred
   :type 'string)
@@ -454,14 +454,17 @@ This is ugly but it works..."
       (magit-section-show magit-root-section))))
 
 ;;;###autoload
-(defun deterred-timeline ()
-  "Open DETERRED timeline buffer."
+(defun deterred-timeline (&optional params)
+  "Open DETERRED timeline buffer.
+
+PARAMS is an alist with initial parameters."
   (interactive)
   (let ((buffer (get-buffer-create deterred-timeline-buffer-name)))
     (display-buffer-full-frame buffer nil)
     (with-current-buffer buffer
       ;; Copy list
       (setq-local deterred-timeline-sources (copy-sequence deterred-sources))
+      (setq-local deterred-timeline-params (copy-tree params))
       (deterred-timeline--render))))
 
 (provide 'deterred-timeline)

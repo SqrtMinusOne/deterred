@@ -465,7 +465,6 @@ Returns an alist with keys:
 
 (defun deterred-dispatcher--range-dashboards ()
   "Return dashboards that support both `:start-date' and `:end-date'."
-  (deterred-dashboard-maybe-init)
   (seq-sort-by
    (lambda (dashboard) (oref dashboard name))
    #'string-lessp
