@@ -1177,6 +1177,32 @@ def plot_sent_received(ax, df, x_col, title):
 def should_render_monthly(df, x_col='month'):
     return len(df) > 0 and df[x_col].nunique() < 30
 
+def style_month_ticks(ax, labels, max_ticks=12):
+    if len(labels) == 0:
+        return
+    step = max(1, (len(labels) + max_ticks - 1) // max_ticks)
+    tick_positions = list(range(0, len(labels), step))
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha='right')
+    ax.figure.tight_layout()
+
+def plot_sent_fraction(ax, df, x_col, title):
+    if len(df) == 0:
+        return
+    total = df['sent'] + df['received']
+    df_plot = df.loc[total > 0, [x_col, 'sent']].reset_index(drop=True).copy()
+    if len(df_plot) == 0:
+        return
+    df_plot['fraction'] = df.loc[total > 0, 'sent'] / total[total > 0]
+    x_positions = list(range(len(df_plot)))
+    ax.plot(x_positions, df_plot['fraction'], marker='o')
+    ax.axhline(y=0.5, color='black', linestyle='--', linewidth=0.8)
+    ax.set_title(title)
+    ax.set_xlabel(x_col.capitalize())
+    ax.set_ylabel('Sent fraction')
+    ax.set_ylim(0, 1)
+    style_month_ticks(ax, df_plot[x_col].tolist())
+
 # Total per year
 fig, ax = plt.subplots(figsize=(8, 5))
 plot_sent_received(ax, df_year, 'year', 'Messages sent/received per year')
@@ -1196,6 +1222,13 @@ images.append(fig_to_b64(fig))
 if should_render_monthly(df_month):
     fig, ax = plt.subplots(figsize=(8, 5))
     plot_sent_received(ax, df_month, 'month', 'Messages sent/received per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+if len(df_month) > 0:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_sent_fraction(ax, df_month, 'month', 'Sent vs. received fraction per month')
     images.append(fig_to_b64(fig))
 else:
     images.append(None)
@@ -1342,44 +1375,48 @@ print(json.dumps(images))"
        (deterred-dashboard-print-images-base64 (elt images 3))
        (insert "\n"))
      (when (elt images 4)
-       (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
+       (insert (deterred-format (f-h3 "Sent vs. received fraction per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 4))
        (insert "\n"))
      (when (elt images 5)
-       (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
+       (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 5))
        (insert "\n"))
      (when (elt images 6)
-       (insert (deterred-format (f-h3 "Messages sent in top N personal chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 6))
        (insert "\n"))
      (when (elt images 7)
-       (insert (deterred-format (f-h3 "Messages received in top N personal chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 7))
        (insert "\n"))
      (when (elt images 8)
-       (insert (deterred-format (f-h3 "Messages sent in top N group chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages received in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 8))
        (insert "\n"))
      (when (elt images 9)
-       (insert (deterred-format (f-h3 "Messages received in top N group chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 9))
        (insert "\n"))
      (when (elt images 10)
-       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages received in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 10))
        (insert "\n"))
      (when (elt images 11)
-       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 11))
        (insert "\n"))
      (when (elt images 12)
-       (insert (deterred-format (f-h3 "Messages per category per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 12))
        (insert "\n"))
      (when (elt images 13)
-       (insert (deterred-format (f-h3 "Messages per category per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages per category per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 13))
+       (insert "\n"))
+     (when (elt images 14)
+       (insert (deterred-format (f-h3 "Messages per category per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 14))
        (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"
