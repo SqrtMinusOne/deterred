@@ -99,6 +99,31 @@ individual \"heartbeats\" into timespans."
       #'<
       (seq-group-by #'car normalized-series)))))
 
+(defun deterred-chains--to-series (chains)
+  "Convert CHAINS to flat series.
+
+A chain is a list of elements like (<start> <end> <data>), where
+<start> and <end> are mandatory.
+
+Return a sorted list of (<'start | \\='end> <timestamp> <data>
+<series-i>)"
+  (seq-sort
+   (lambda (e1 e2)
+     ;; If timestamps are the same, ends go before starts
+     (if (= (nth 1 e1) (nth 1 e2))
+         (eq (nth 0 e1) 'end)
+       (< (nth 1 e1) (nth 1 e2))))
+   (cl-loop for i from 0
+            for chain in chains
+            append (cl-mapcan
+                    (lambda (e)
+                      (unless (nth 1 e)
+                        (error "This function requires both start and end in entries"))
+                      (list
+                       `(start ,(nth 0 e) ,(nth 2 e) ,i)
+                       `(end ,(nth 1 e) ,(nth 2 e) ,i)))
+                    chain))))
+
 (defun deterred-chains-intersection (chains &optional merge-data-fn)
   "Calculate intersection of CHAINS.
 
@@ -113,23 +138,7 @@ arguments, where N is the number of chains, and each argument is the
 data field of the relevant chain entry in the order that CHAINS were
 given."
   (let ((series
-         ;; A list of (<'start | 'end> <timestamp> <data> <series-i>)
-         (seq-sort
-          (lambda (e1 e2)
-            ;; If timestamps are the same, ends go before starts
-            (if (= (nth 1 e1) (nth 1 e2))
-                (eq (nth 0 e1) 'end)
-              (< (nth 1 e1) (nth 1 e2))))
-          (cl-loop for i from 0
-                   for chain in chains
-                   append (cl-mapcan
-                           (lambda (e)
-                             (unless (nth 1 e)
-                               (error "`deterred-chains-interesction' requires both start and end in entries"))
-                             (list
-                              `(start ,(nth 0 e) ,(nth 2 e) ,i)
-                              `(end ,(nth 1 e) ,(nth 2 e) ,i)))
-                           chain))))
+         (deterred-chains--to-series chains))
         ;; Active entries from each chain
         (entries-bitmap (make-vector (seq-length chains) nil))
         current-intersection-start
@@ -300,6 +309,114 @@ interval normalized to 1."
   (if (cadar chain)
       (deterred-chains-discretize--ranges chain timestamps merge-data-fn)
     (deterred-chains-discretize--points chain timestamps merge-data-fn)))
+
+(defun deterred-chains-difference (chains)
+  "Return all elements in the first chain but not in others.
+
+CHAINS is a list of chains.  A chain is a list of elements like
+\(<start> <end> <data>), where <start> and <end> are mandatory and
+<data> is optional."
+  (let ((series (deterred-chains--to-series chains))
+        (entries-bitmap (make-vector (seq-length chains) nil))
+        current-elem-start
+        difference)
+    (dolist (e series)
+      (if (eq (car e) 'start)
+          ;; We assume chains have no overlapping entries, otherwise
+          ;; [s1 s2 e1 e2] will be treated as [s1 e1]
+          (aset entries-bitmap (nth 3 e) (or (aref entries-bitmap (nth 3 e)) e))
+        (aset entries-bitmap (nth 3 e) nil))
+      ;; Check if we're currently in a place where only the first
+      ;; chain has something
+      (if (and (aref entries-bitmap 0)
+               (not (seq-every-p #'identity (seq-rest entries-bitmap))))
+          ;; If so, start the difference span counter unless it's
+          ;; started
+          (unless current-elem-start
+            (setq current-elem-start (nth 1 e)))
+        ;; Otherwise, we aren't in such a place.  We have to record
+        ;; the difference span from the previous iteration if there
+        ;; was one
+        (when current-elem-start
+          (push
+           (list current-elem-start (nth 1 e)
+                 ;; If it's the first chain end, the first entry in
+                 ;; `entries-bitmap' will be empty, but then `e' is
+                 ;; for sure part of that chain.
+                 (nth 2 (or (aref entries-bitmap 0) e)))
+           difference)
+          (setq current-elem-start nil))))
+    (seq-sort-by #'car #'< difference)))
+
+(defun deterred-chains-coalesce (chain)
+  "Coalesce the nearby non-overlapping intervals of CHAIN.
+
+Assume CHAIN is sorted.  Take data from the first interval.
+
+E.g. [1 3] [3 5] -> [1 5]"
+  (let (res prev)
+    (dolist (elem chain)
+      (if prev
+          (if (= (nth 1 prev) (nth 0 elem))
+              (setf (nth 1 prev) (nth 1 elem))
+            (push prev res)
+            (setq prev elem))
+        (setq prev elem)))
+    (push prev res)
+    (nreverse res)))
+
+(defun deterred-chains-union (chains &optional merge-data-fn)
+  "Return a non-overlapping union of CHAINS.
+
+A chain is a list of elements like (<start> <end> <data>), where
+<start> and <end> are mandatory and <data> is optional.
+
+Return one merged chain.
+
+If MERGE-DATA-FN is non-nil, it will be used to populate the <data>
+field of the merged chain.  The function will be called with N
+arguments, where N is the number of chains, and each argument is the
+data field of the relevant chain entry in the order that CHAINS were
+given, or nil."
+  (let ((series (deterred-chains--to-series chains))
+        (entries-bitmap (make-vector (seq-length chains) nil))
+        current-elem-start
+        union)
+    (dolist (e series)
+      (if (eq (car e) 'start)
+          ;; We assume chains have no overlapping entries, otherwise
+          ;; [s1 s2 e1 e2] will be treated as [s1 e1]
+          (aset entries-bitmap (nth 3 e) (or (aref entries-bitmap (nth 3 e)) e))
+        (aset entries-bitmap (nth 3 e) nil))
+      ;; The difference from `deterred-chains-intersection' and
+      ;; `deterred-chains-difference' is that here, each element of
+      ;; series changes the union configuration, which warrants a
+      ;; separate chain element.
+      (when current-elem-start
+        (let ((data (cl-loop for i from 0
+                             for i-e across entries-bitmap
+                             ;; `entries-bitmap' will have all
+                             ;; active entires except one from the
+                             ;; recently ended chain
+                             if (= i (nth 3 e)) collect (nth 2 e)
+                             else collect (nth 2 i-e))))
+          (push
+           (list current-elem-start (nth 1 e)
+                 (when merge-data-fn
+                   (apply merge-data-fn data)))
+           union))
+        (setq current-elem-start nil))
+
+      ;; Check if we're currently in a place where there's currently
+      ;; at least one element
+      (when (seq-some #'identity entries-bitmap)
+        ;; If so, start the element counter unless it's started
+        (unless current-elem-start
+          (setq current-elem-start (nth 1 e)))))
+    (setq union (seq-sort-by #'car #'< union))
+    (unless merge-data-fn
+      (setq union (deterred-chains-coalesce union)))
+    union))
 
 (provide 'deterred-chains)
 ;;; deterred-chains.el ends here
