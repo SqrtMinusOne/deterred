@@ -617,6 +617,12 @@ Return a list of alists with :name, :start, :end for each messenger."
                 (:end . ,(alist-get 'end row))))
             data)))
 
+(declare-function
+ deterred-messengers-categories-process-all-chats "deterred-messengers-categories")
+(declare-function deterred-messengers-chains-compute "deterred-messengers-chains")
+(declare-function
+ deterred-messengers-chains-compute-hostname "deterred-messengers-chains")
+
 (cl-defmethod deterred-source-actions ((_source deterred-messengers) &optional callback)
   "Run an action for the messengers source.
 
@@ -625,7 +631,11 @@ Run CALLBACK when done."
    '(("Load Telegram JSON" deterred-messengers-load-telegram-json nil)
      ("Load VK HTML" deterred-messengers-load-vk-html nil)
      ("Load Telega" deterred-messengers-load-telega nil)
-     ("Load Discord" deterred-messengers-load-discord))
+     ("Load Discord" deterred-messengers-load-discord)
+     ("Process categories" deterred-messengers-categories-process-all-chats nil)
+     ("Compute chains" deterred-messengers-chains-compute nil)
+     ("Compute chain hostnames" deterred-messengers-chains-compute-hostname nil)
+     ("Clear duplicates" deterred-messengers-delete-duplicates nil))
    callback))
 
 (cl-defmethod deterred-source-range-summary
