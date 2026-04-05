@@ -833,6 +833,27 @@ end timestamp."
                     FROM activitywatch_notafk_period")))
     (cons (caar data) (cadar data))))
 
+(cl-defmethod deterred-source-range-detail
+  ((_source deterred-activitywatch) &optional db)
+  "Get the data availability range for each hostname.
+
+DB is the sqlite database object.
+
+Return a list of alists with :name, :start, :end for each hostname."
+  (let* ((db (or db (deterred-db--init)))
+         (data (deterred-db-select-alist
+                db "SELECT hostname,
+                      MIN(notafk_start_timestamp) start,
+                      MAX(notafk_end_timestamp) end
+                    FROM activitywatch_notafk_period
+                    GROUP BY hostname
+                    ORDER BY start")))
+    (mapcar (lambda (row)
+              `((:name . ,(alist-get 'hostname row))
+                (:start . ,(alist-get 'start row))
+                (:end . ,(alist-get 'end row))))
+            data)))
+
 (cl-defmethod deterred-source-range-summary
   ((_source deterred-activitywatch) start end &optional db)
   "Make ActivityWatch summary for [START, END].
