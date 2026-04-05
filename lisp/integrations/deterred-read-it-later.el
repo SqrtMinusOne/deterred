@@ -234,6 +234,36 @@ The results are a list of alists suitable for
              (funcall callback results)))))
       :error #'deterred-utils-on-request-error)))
 
+(defun deterred-read-it-later--fix-migrated-ids (results db)
+  "Fix cases where the articles have migrated ids.
+
+RESULTS is the same form as taken by `deterred-read-it-later--store'.
+DB is the SQLite connection object."
+  (let* ((dupe-data
+          (deterred-db-select-alist
+           db
+           "SELECT title, created_at, count(*) c
+FROM read_it_later_article rila
+GROUP BY title, created_at
+HAVING count(*) > 1"))
+         (dupe-keys (make-hash-table :test #'equal))
+         (i 0))
+    (dolist (datum dupe-data)
+      (puthash (format "%s-%s" (alist-get 'title datum)
+                       (alist-get 'created_at datum))
+               t dupe-keys))
+    (dolist (datum results)
+      (when (gethash (format "%s-%s" (alist-get 'title datum)
+                             (alist-get 'created_at datum))
+                     dupe-keys)
+        (cl-incf i)
+        (sqlite-execute
+         db
+         "DELETE FROM read_it_later_article WHERE title = ? AND created_at = ? AND id != ?"
+         (list (alist-get 'title datum) (alist-get 'created_at datum)
+               (alist-get 'id datum)))))
+    (message "Cleared %s duplicates" i)))
+
 (defun deterred-read-it-later--store (results)
   "Store RESULTS in the database.
 
@@ -268,6 +298,8 @@ read_it_later_article table."
        :table-name 'read_it_later_article
        :values results
        :conflict-action 'do-nothing)
+      (deterred-read-it-later--fix-migrated-ids
+       results db)
       (deterred-db-mark-updated-batch
        db '(read_it_later_article read_it_later_host)))))
 
