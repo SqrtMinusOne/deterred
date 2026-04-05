@@ -101,7 +101,7 @@ DB is a sqlite database object."
          (pending-migrations (seq-difference all-migrations applied-migrations #'equal))
          (unknown-migrations (seq-difference applied-migrations all-migrations #'equal)))
     (when unknown-migrations
-      (user-error "Unknown migrations in db: %s.  Maybe update Deterred?"))
+      (user-error "Unknown migrations in db: %s.  Maybe update Deterred?" unknown-migrations))
     pending-migrations))
 
 (defun deterred-db--migrations-execute (db pending)

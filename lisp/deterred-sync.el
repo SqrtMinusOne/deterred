@@ -269,7 +269,8 @@ Abnormal conditions:
             . ,(lambda ()
                  (deterred-sync--execute-other
                   (alist-get 'hostname entry)
-                  (eq current-prefix-arg '(4)))))))
+                  (equal current-prefix-arg '(4))
+                  (equal current-prefix-arg '(16)))))))
         ;; 4
         ((and (alist-get 'current entry)
               (< (alist-get 'db-time entry)
@@ -293,11 +294,14 @@ Abnormal conditions:
              (deterred-sync--get-file-name (system-name))
              t t t t))
 
-(defun deterred-sync--execute-other (hostname dry-run)
+(defun deterred-sync--execute-other (hostname dry-run migrate)
   "Sync data from HOSTNAME database into the current database.
 
 If DRY-RUN is non-nil, only print the actions to be done into a
-buffer without executing them."
+buffer without executing them.
+
+If MIGRATE is non-nil, copy the database and apply migrations before
+syncing."
   (let* ((db (deterred-db--init))
          (db-other-path (deterred-sync--get-file-name hostname))
          (file-time (time-convert
@@ -306,6 +310,14 @@ buffer without executing them."
                      'integer))
          (log-buffer (get-buffer-create
                       (format "*deterred-sync-%s*" hostname))))
+    (when migrate
+      (let ((new-path (concat (file-name-as-directory temporary-file-directory)
+                              hostname ".temp.db")))
+        (copy-file db-other-path new-path t)
+        (setq db-other-path new-path)
+        (let ((other-db (sqlite-open db-other-path)))
+          (deterred-db--migrations-execute
+           other-db (deterred-db--migrations-get-pending other-db)))))
     (with-current-buffer log-buffer
       (erase-buffer)
       (insert (format "Syncing %s to current database%s\n\n"
