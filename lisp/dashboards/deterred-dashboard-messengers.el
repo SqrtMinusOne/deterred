@@ -107,6 +107,7 @@ ORDER BY category")))
     (personal-sent-received-per-year (name . "Personal messages sent/received per year"))
     (group-sent-received-per-year (name . "Group messages sent/received per year"))
     (sent-received-per-month (name . "Messages sent/received per month"))
+    (sent-received-in-chains-per-month (name . "Messages in chains sent/received per month"))
     (personal-sent-received-per-month (name . "Personal messages sent/received per month"))
     (group-sent-received-per-month (name . "Group messages sent/received per month"))
     (messages-per-category (name . "Messages and time per category"))
@@ -249,7 +250,7 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
   WHERE sub.device = 'pc'
 ) AS pc_hours;"
            (append params `((:my-id . ,my-id)))))
-)
+         )
     `((sent-received-per-year
        . ,(deterred-db-select-template-alist
            db
@@ -319,6 +320,25 @@ WHERE 1 = 1
   [[AND mm.messenger IN :messenger]]
   [[AND mm.category IN :category]]
 GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')"
+           (append params `((:my-id . ,my-id)))))
+      (sent-received-in-chains-per-month
+       . ,(deterred-db-select-template-alist
+           db
+           "SELECT
+  strftime('%Y-%m', mm.timestamp, 'unixepoch') month,
+  sum(CASE WHEN mm.sender_id = :my-id THEN 1 ELSE 0 END) sent,
+  sum(CASE WHEN mm.sender_id != :my-id THEN 1 ELSE 0 END) received
+FROM messenger_message mm
+INNER JOIN messenger_chat mc ON mc.id = mm.chat_id
+WHERE mm.chain_id IS NOT NULL
+  [[AND date(mm.timestamp, 'unixepoch') >= date(:start-date, 'unixepoch')]]
+  [[AND date(mm.timestamp, 'unixepoch') <= date(:end-date, 'unixepoch')]]
+  [[AND mc.type IN :chat-type]]
+  [[AND mc.name IN :chat-name]]
+  [[AND mm.messenger IN :messenger]]
+  [[AND mm.category IN :category]]
+GROUP BY strftime('%Y-%m', mm.timestamp, 'unixepoch')
+ORDER BY month ASC"
            (append params `((:my-id . ,my-id)))))
       (personal-sent-received-per-month
        . ,(deterred-db-select-template-alist
@@ -1145,6 +1165,7 @@ df_year = pd.DataFrame(data['sent-received-per-year']['data'])
 df_personal_year = pd.DataFrame(data['personal-sent-received-per-year']['data'])
 df_group_year = pd.DataFrame(data['group-sent-received-per-year']['data'])
 df_month = pd.DataFrame(data['sent-received-per-month']['data'])
+df_chains_month = pd.DataFrame(data['sent-received-in-chains-per-month']['data'])
 df_personal_month = pd.DataFrame(data['personal-sent-received-per-month']['data'])
 df_group_month = pd.DataFrame(data['group-sent-received-per-month']['data'])
 df_category_month = pd.DataFrame(data['category-per-month']['data'])
@@ -1186,6 +1207,19 @@ def style_month_ticks(ax, labels, max_ticks=12):
     ax.set_xticklabels([labels[i] for i in tick_positions], rotation=45, ha='right')
     ax.figure.tight_layout()
 
+def plot_month_fraction(ax, df_plot, x_col, value_col, title, ylabel):
+    if len(df_plot) == 0:
+        return
+    x_positions = list(range(len(df_plot)))
+    marker = None if len(df_plot) > 24 else 'o'
+    ax.plot(x_positions, df_plot[value_col], marker=marker, markersize=3)
+    ax.axhline(y=0.5, color='black', linestyle='--', linewidth=0.8)
+    ax.set_title(title)
+    ax.set_xlabel(x_col.capitalize())
+    ax.set_ylabel(ylabel)
+    ax.set_ylim(0, 1)
+    style_month_ticks(ax, df_plot[x_col].tolist())
+
 def plot_sent_fraction(ax, df, x_col, title):
     if len(df) == 0:
         return
@@ -1194,14 +1228,7 @@ def plot_sent_fraction(ax, df, x_col, title):
     if len(df_plot) == 0:
         return
     df_plot['fraction'] = df.loc[total > 0, 'sent'] / total[total > 0]
-    x_positions = list(range(len(df_plot)))
-    ax.plot(x_positions, df_plot['fraction'], marker='o')
-    ax.axhline(y=0.5, color='black', linestyle='--', linewidth=0.8)
-    ax.set_title(title)
-    ax.set_xlabel(x_col.capitalize())
-    ax.set_ylabel('Sent fraction')
-    ax.set_ylim(0, 1)
-    style_month_ticks(ax, df_plot[x_col].tolist())
+    plot_month_fraction(ax, df_plot, x_col, 'fraction', title, 'Sent fraction')
 
 # Total per year
 fig, ax = plt.subplots(figsize=(8, 5))
@@ -1229,6 +1256,13 @@ else:
 if len(df_month) > 0:
     fig, ax = plt.subplots(figsize=(8, 5))
     plot_sent_fraction(ax, df_month, 'month', 'Sent vs. received fraction per month')
+    images.append(fig_to_b64(fig))
+else:
+    images.append(None)
+
+if len(df_chains_month) > 0:
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plot_sent_fraction(ax, df_chains_month, 'month', 'Sent vs. received fraction per month in chains')
     images.append(fig_to_b64(fig))
 else:
     images.append(None)
@@ -1379,44 +1413,48 @@ print(json.dumps(images))"
        (deterred-dashboard-print-images-base64 (elt images 4))
        (insert "\n"))
      (when (elt images 5)
-       (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
+       (insert (deterred-format (f-h3 "Sent vs. received fraction per month in chains") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 5))
        (insert "\n"))
      (when (elt images 6)
-       (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
+       (insert (deterred-format (f-h3 "Personal messages sent/received per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 6))
        (insert "\n"))
      (when (elt images 7)
-       (insert (deterred-format (f-h3 "Messages sent in top N personal chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Group messages sent/received per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 7))
        (insert "\n"))
      (when (elt images 8)
-       (insert (deterred-format (f-h3 "Messages received in top N personal chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 8))
        (insert "\n"))
      (when (elt images 9)
-       (insert (deterred-format (f-h3 "Messages sent in top N group chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages received in top N personal chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 9))
        (insert "\n"))
      (when (elt images 10)
-       (insert (deterred-format (f-h3 "Messages received in top N group chats per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 10))
        (insert "\n"))
      (when (elt images 11)
-       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages received in top N group chats per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 11))
        (insert "\n"))
      (when (elt images 12)
-       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages sent per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 12))
        (insert "\n"))
      (when (elt images 13)
-       (insert (deterred-format (f-h3 "Messages per category per month") "\n"))
+       (insert (deterred-format (f-h3 "Messages received per messenger per year") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 13))
        (insert "\n"))
      (when (elt images 14)
-       (insert (deterred-format (f-h3 "Messages per category per year") "\n"))
+       (insert (deterred-format (f-h3 "Messages per category per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 14))
+       (insert "\n"))
+     (when (elt images 15)
+       (insert (deterred-format (f-h3 "Messages per category per year") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 15))
        (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top periods") "\n"

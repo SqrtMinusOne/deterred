@@ -890,7 +890,6 @@ interactively where it will prompt for user selection."
                       (list user1-id user2-id))
       (sqlite-execute db "UPDATE messenger_chat SET target_user_id = ? WHERE target_user_id = ?"
                       (list user1-id user2-id))
-
       ;; Find and merge duplicate personal chats
       (deterred-messengers--merge-duplicate-personal-chats db)
 
