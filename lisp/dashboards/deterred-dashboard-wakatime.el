@@ -40,6 +40,7 @@
     (:end-date)
     (:projects)
     (:n-top-projects . 5)
+    (:n-top-languages . 10)
     (:folders-to-compare)))
 
 (cl-defmethod deterred-dashboard-render-params ((_dashboard deterred-dashboard-wakatime))
@@ -70,6 +71,10 @@
   (deterred-dashboard-widget-number
    :name "Top N projects"
    :key :n-top-projects)
+  (insert "\n")
+  (deterred-dashboard-widget-number
+   :name "Top N languages"
+   :key :n-top-languages)
   (insert "\n")
   (let* ((db (deterred-db--init))
          (project-roots (deterred-db-select-alist
@@ -139,6 +144,7 @@ ORDER BY %s ASC" time-format time-column case-stmt case-stmt time-format time-co
     (top-entities (name . "Top entities"))
     (hours-per-year (name . "Hours logged per year"))
     (hours-per-month (name . "Hours per month"))
+    (hours-in-top-languages-per-year (name . "Hours in top-N languages by year"))
     (hours-in-top-by-month  (name . "Hours in top-N projects by month"))
     (hours-in-new-projects-per-year (name . "Hours in new projects per year"))
     (average-project-age-per-month (name . "Average project age per month"))
@@ -282,6 +288,31 @@ FROM wakatime_grand_total wgt
 WHERE 1 = 1 [[AND wgt.timestamp >= :start-date]] [[AND wgt.timestamp <= :end-date]]
   [[AND wgt.project_id IN :projects]]
 GROUP BY strftime('%Y-%m', wgt.timestamp, 'unixepoch')"
+           params))
+      (hours-in-top-languages-per-year
+       . ,(deterred-db-select-template-alist
+           db
+           "WITH top_languages AS (
+    SELECT
+      wl.name,
+      sum(wl.total_seconds) total
+    FROM wakatime_languages wl
+    WHERE 1 = 1 [[AND wl.timestamp >= :start-date]] [[AND wl.timestamp <= :end-date]]
+      [[AND wl.project_id IN :projects]]
+    GROUP BY wl.name
+    ORDER BY total DESC
+    LIMIT :n-top-languages
+)
+SELECT
+   strftime('%Y', wl.timestamp, 'unixepoch') year,
+   CASE WHEN tl.name IS NULL THEN 'Other' ELSE wl.name END language,
+   CAST(sum(wl.total_seconds) * 100 / (60 * 60) AS integer) / 100.0 hours
+FROM wakatime_languages wl
+LEFT JOIN top_languages tl ON tl.name = wl.name
+WHERE 1 = 1 [[AND wl.timestamp >= :start-date]] [[AND wl.timestamp <= :end-date]]
+  [[AND wl.project_id IN :projects]]
+GROUP BY strftime('%Y', wl.timestamp, 'unixepoch'), language
+ORDER BY year ASC, language = 'Other', hours DESC"
            params))
       (hours-in-top-by-month
        . ,(deterred-db-select-template-alist
@@ -499,6 +530,16 @@ import io
 data = json.loads(input())
 df_y = pd.DataFrame(data['hours-per-year']['data'])
 df_m = pd.DataFrame(data['hours-per-month']['data'])
+df_l = pd.DataFrame(data['hours-in-top-languages-per-year']['data'])
+if {'year', 'language', 'hours'}.issubset(df_l.columns) and not df_l.empty:
+    language_order = df_l.groupby('language')['hours'].sum().sort_values(ascending=False).index
+    language_order = [language for language in language_order if language != 'Other'] + (
+        ['Other'] if 'Other' in language_order else []
+    )
+    df_l_p = df_l.pivot(index='year', columns='language', values='hours').fillna(0)
+    df_l_p = df_l_p.reindex(columns=language_order)
+else:
+    df_l_p = pd.DataFrame()
 df_t = pd.DataFrame(data['hours-in-top-by-month']['data'])
 df_tp = df_t.pivot(index='month', columns='project', values='hours').fillna(0)
 df_new = pd.DataFrame(data['hours-in-new-projects-per-year']['data'])
@@ -511,6 +552,16 @@ df_y.plot(ax=ax, kind='bar', x='year', y='hours')
 ax.set_title('Hours coded per year')
 for container in ax.containers:
     ax.bar_label(container, fmt='%.0f')
+images.append(fig_to_b64(fig))
+
+fig, ax = plt.subplots(figsize=(8, 7))
+ax.set_title('Hours coded in top languages per year')
+if not df_l_p.empty:
+    df_l_p.plot(ax=ax, kind='bar', stacked=True)
+    ax.set_xlabel('Year')
+    ax.set_ylabel('Hours')
+    ax.legend(title='Language', loc='upper center', bbox_to_anchor=(0.5, -0.25), ncol=min(3, len(df_l_p.columns)))
+    plt.tight_layout()
 images.append(fig_to_b64(fig))
 
 fig, ax = plt.subplots(figsize=(8, 5))
@@ -561,19 +612,22 @@ print(json.dumps(images))"
      (insert (deterred-format (f-h3 "Hours coded per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 0))
      (insert "\n")
-     (insert (deterred-format (f-h3 "Hours coded per month") "\n"))
+     (insert (deterred-format (f-h3 "Hours coded in top languages per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 1))
      (insert "\n")
-     (insert (deterred-format (f-h3 "Hours spent in top N projects by month") "\n"))
+     (insert (deterred-format (f-h3 "Hours coded per month") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 2))
      (insert "\n")
-     (insert
-      (deterred-format (f-h3 "Hours spent in new vs. old projects per year") "\n"))
+     (insert (deterred-format (f-h3 "Hours spent in top N projects by month") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 3))
      (insert "\n")
      (insert
-      (deterred-format (f-h3 "Average project age per month") "\n"))
+      (deterred-format (f-h3 "Hours spent in new vs. old projects per year") "\n"))
      (deterred-dashboard-print-images-base64 (elt images 4))
+     (insert "\n")
+     (insert
+      (deterred-format (f-h3 "Average project age per month") "\n"))
+     (deterred-dashboard-print-images-base64 (elt images 5))
      (insert "\n")))
   ;; Folder comparison charts
   (when (and (alist-get 'hours-by-folder-per-month data)

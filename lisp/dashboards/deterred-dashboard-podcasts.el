@@ -373,6 +373,17 @@ data = json.loads(input())
 df_podcasts = pd.DataFrame(data['podcasts-new']['data'])
 df_new = pd.DataFrame(data['podcasts-new-hours']['data'])
 
+for column in ['year', 'new_podcasts']:
+    if column not in df_podcasts.columns:
+        df_podcasts[column] = pd.Series(dtype='object')
+for column in ['year', 'new', 'old']:
+    if column not in df_new.columns:
+        df_new[column] = pd.Series(dtype='object')
+
+df_podcasts = df_podcasts.rename(columns={'new_podcasts': 'podcasts_discovered'})
+df_plot = pd.merge(df_podcasts, df_new, on='year', how='outer').sort_values('year')
+df_plot[['podcasts_discovered', 'new', 'old']] = df_plot[['podcasts_discovered', 'new', 'old']].fillna(0)
+
 images = []
 
 # Combined: Podcasts discovered + Hours listened to new vs old podcasts
@@ -382,14 +393,14 @@ ax1.set_xlabel('Year')
 ax1.set_ylabel('Podcasts Discovered', color='C2')
 
 import numpy as np
-x_pos = np.arange(len(df_podcasts))
+x_pos = np.arange(len(df_plot))
 width = 0.35
 
 # Bars for podcasts discovered on primary axis
-bars1 = ax1.bar(x_pos - width/2 - 0.05, df_podcasts['new_podcasts'], width, color='C2', label='Podcasts Discovered')
+bars1 = ax1.bar(x_pos - width/2 - 0.05, df_plot['podcasts_discovered'], width, color='C2', label='Podcasts Discovered')
 ax1.tick_params(axis='y', labelcolor='C2')
 ax1.set_xticks(x_pos)
-ax1.set_xticklabels(df_podcasts['year'], rotation=45)
+ax1.set_xticklabels(df_plot['year'], rotation=45)
 ax1.legend(loc='upper left')
 
 # Add value labels on podcasts discovered bars
@@ -402,8 +413,8 @@ for bar in bars1:
 # Stacked bars for hours listened on secondary axis
 ax2 = ax1.twinx()
 ax2.set_ylabel('Hours Listened', color='black')
-ax2.bar(x_pos + width/2 + 0.05, df_new['new'], width, label='New podcasts', color='C0', alpha=0.7)
-ax2.bar(x_pos + width/2 + 0.05, df_new['old'], width, bottom=df_new['new'], label='Old podcasts', color='C1', alpha=0.7)
+ax2.bar(x_pos + width/2 + 0.05, df_plot['new'], width, label='New podcasts', color='C0', alpha=0.7)
+ax2.bar(x_pos + width/2 + 0.05, df_plot['old'], width, bottom=df_plot['new'], label='Old podcasts', color='C1', alpha=0.7)
 ax2.legend(loc='upper right')
 
 fig.tight_layout()
