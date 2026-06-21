@@ -45,7 +45,7 @@
 
 (defconst deterred-fit--parser-script
   (expand-file-name
-   "../../scripts/deterred-fit-parse.py"
+   (concat (unless load-file-name "../") "../python/deterred-fit-parse.py")
    (file-name-directory (or load-file-name buffer-file-name default-directory)))
   "Path to the helper script that parses FIT files.")
 
@@ -195,6 +195,12 @@ WHERE end_timestamp >= ?
   AND start_timestamp <= ?
 ORDER BY start_timestamp"
      (list start end))))
+
+(declare-function deterred-dashboard-fit "deterred-dashboard-fit")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-fit))
+  "Return the default dashboard for FIT activities."
+  (deterred-dashboard-fit))
 
 (provide 'deterred-fit)
 ;;; deterred-fit.el ends here
