@@ -56,7 +56,7 @@ return its printed representation.  Otherwise return VALUE as-is."
                               for value in row
                               collect (cons key value)))))
 
-(defun deterred-utils-read-csv-with-python (file &optional delimiter)
+(defun deterred-utils-read-csv-with-python (file &optional delimiter array-type)
   "Read a CSV FILE into alist with python.
 
 DELIMITER defaults to comma, can be set to semicolon or other.  This
@@ -66,7 +66,8 @@ works better than `pcsv' for Reddit dump."
     (format "cat %s | python -c 'import csv, json, sys; print(json.dumps([dict(r) for r in csv.DictReader(sys.stdin, delimiter=\"%s\")]))'"
             (shell-quote-argument (expand-file-name file))
             (or delimiter ",")))
-   :object-type 'alist))
+   :object-type 'alist
+   :array-type (or array-type 'array)))
 
 (defun deterred-utils-read-csv-string-with-python (csv-content &optional delimiter)
   "Read CSV-CONTENT into alist with python.
