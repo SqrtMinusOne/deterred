@@ -68,10 +68,55 @@ DATA is a list of alists, VTABLE-ARGS is passed to `make-vtable'."
                               data)))
         (apply #'make-vtable
                :objects objects
-               :columns (mapcar #'symbol-name columns)
+               :columns (mapcar (lambda (column)
+                                   (let ((name (symbol-name column)))
+                                     (list :name name
+                                           :min-width (max 1 (string-width name)))))
+                                 columns)
                :use-header-line nil
                vtable-args)))
     (switch-to-buffer-other-window buffer)))
+
+(defun deterred-grid--value-to-string (value)
+  "Convert VALUE to a string for grid output."
+  (cond
+   ((null value) "")
+   ((numberp value) (number-to-string value))
+   ((stringp value) value)
+   ((symbolp value) (symbol-name value))
+   (t (prin1-to-string value))))
+
+(defun deterred-grid--csv-escape (value)
+  "Escape VALUE for a CSV field."
+  (let ((string (deterred-grid--value-to-string value)))
+    (if (string-match-p (rx (any ",\"\n\r")) string)
+        (concat "\"" (string-replace "\"" "\"\"" string) "\"")
+      string)))
+
+(defun deterred-grid-to-csv (data)
+  "Return DATA as a CSV string.
+
+DATA is a list of alists.  The first row defines the column order."
+  (when data
+    (let ((columns (mapcar #'car (car data))))
+      (concat
+       (mapconcat (lambda (column)
+                    (deterred-grid--csv-escape (symbol-name column)))
+                  columns ",")
+       "\n"
+       (mapconcat
+        (lambda (row)
+          (mapconcat (lambda (column)
+                       (deterred-grid--csv-escape (alist-get column row)))
+                     columns ","))
+        data "\n")
+       "\n"))))
+
+(defun deterred-grid-save-csv (data file)
+  "Save DATA as CSV to FILE."
+  (with-temp-file file
+    (insert (or (deterred-grid-to-csv data) "")))
+  (message "Saved CSV to %s" file))
 
 (defun deterred-grid--org-table-escape (string)
   "Escape STRING for use in `org-mode' tables."

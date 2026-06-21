@@ -35,6 +35,7 @@
 (require 'outline)
 (require 'validate)
 (require 'crm)
+(require 'subr-x)
 
 (require 'deterred-format)
 (require 'deterred-grid)
@@ -210,6 +211,22 @@ Data has be a list of alists to work correctly."
                  "Refresh")
   (insert "\n\n"))
 
+(defun deterred-dashboard--safe-filename (name)
+  "Return NAME converted to a safe file name."
+  (string-trim
+   (replace-regexp-in-string
+    (rx (+ (not (any alnum "." "_" "-"))))
+    "-"
+    (downcase name))
+   "-" "-"))
+
+(defun deterred-dashboard--dataset-csv-default-file (dashboard-name dataset-name)
+  "Return the default CSV file name for DATASET-NAME in DASHBOARD-NAME."
+  (concat
+   (deterred-dashboard--safe-filename
+    (format "deterred-%s-%s" dashboard-name dataset-name))
+   ".csv"))
+
 (defun deterred-dashboard--render-datasets (name data)
   "Render the datasets section for the dashboard interface.
 
@@ -228,6 +245,15 @@ NAME is the dashboard name, DATA is the output of
         " " (f-button "[View table]"
                       (lambda (&rest _)
                         (deterred-grid-show (alist-get 'data iter))))
+        " " (f-button "[Save CSV]"
+                      (lambda (&rest _)
+                        (deterred-grid-save-csv
+                         (alist-get 'data iter)
+                         (read-file-name
+                          "Save dataset CSV to: "
+                          nil nil nil
+                          (deterred-dashboard--dataset-csv-default-file
+                           name (car iter))))))
         " " (f-button "[View raw]"
                       (lambda (&rest _)
                         (let ((buffer
