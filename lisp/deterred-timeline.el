@@ -31,6 +31,8 @@
 
 (require 'deterred-chains)
 (require 'deterred-dashboard)
+(require 'deterred-db)
+(require 'deterred-intervals)
 (require 'deterred-source)
 
 (declare-function evil-define-key* "evil-core")
