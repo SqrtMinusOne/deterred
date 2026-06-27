@@ -1,150 +1,143 @@
-#+TITLE: deterred
+#+TITLE: DETERRED
 
-Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard
+The package aggregates data from multiple datasources and displays the results in Emacs. Most of the data is stored in a SQLite database. The Emacs interface includes an "On this day" form, dashboards with matplotlib-based charts and integrations with other packages.
 
-* Current configuration
-#+begin_src emacs-lisp
-(use-package libmpdel
-  :straight t)
+Backronym: Dispatcher for Emacs Timeline Examination, Retrospective Review, and Enhanced Dashboard.
 
-(use-package pcsv
-  :straight t)
+* Description
+** Why?
+I like to collect data. I think data feels better when structured and collected, even if I query it only once and forget about it. I also have an irrational affinity towards charts.
 
-(use-package uuidgen
-  :straight t)
+Then, it's a shame that corporations and nation states spy on people but keep the data to themselves. If you spy on me, please at least share the results! Now I have to duplicate their work and spy on myself.
 
-(use-package validate
-  :straight t)
+I've been doing this for years before writing this (e.g., [[https://github.com/SqrtMinusOne/sqrt-data/][my previous project]], also my [[github.com/SqrtMinusOne/org-clock-agg][org-clock-agg]] and [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]]). I don't know if it's worth the effort in some abstract sense, but it sometimes makes me happy.
 
-(setq deterred-sources
-      (list
-       (deterred-activitywatch)
-       (deterred-digikam :digikam-db "~/30-39 Life/35 Photos/35.00D DigiKam/digikam4.db")
-       (deterred-habits :org-files '("~/30-39 Life/32 org-mode/misc/habit.org"))
-       ;; (deterred-locations)
-       (deterred-mastodon :server "https://mastodon.bsd.cafe/"
-                          :account-id 113136872089175263)
-       (deterred-messengers)
-       (deterred-mpd)
-       (deterred-org-journal-tags)
-       (deterred-read-it-later :sources '(readeck))
-       (deterred-reddit)
-       (deterred-podcasts)
-       (deterred-wakatime)))
+This is essentially a personal BI platform. Emacs isn't a good fit for such a project, but since I live in Emacs, it's the best choice available.
 
-(setq deterred-backups-location "/home/pavel/10-19 Code/13 Other Projects/13.02 sqrt-data/13.02.B Backups/13.02.B.01 deterred/")
-(setq deterred-dashboard-python "/home/pavel/micromamba/envs/deterred/bin/python")
-(setq deterred-messengers-my-id "098236bb-5fc5-4a04-8b6d-477afa5105fa")
-(setq deterred-digikam-folder "~/30-39 Life/35 Photos/")
-(setq deterred-wakatime-api-key (my/password-store-get "My_Online/APIs/wakatime"))
-(setq deterred-wakatime-project-name-map
-      '(("digital-nlp-docs-3" . "digital-nlp-docs-3 (Graduate)")
-        ("digital-nlp-docs" . "digital-nlp-docs (Master's)")))
-(setq deterred-wakatime-process-project-name
-      (lambda (name)
-        (let ((result (string-replace
-                       "\\" ""
-                       (my/index--bare-project-name name))))
-          (or (alist-get result deterred-wakatime-project-name-map
-                         nil nil #'equal)
-              result))))
-(setq deterred-read-it-later-readeck-token
-      (my/password-store-get-field "Selfhosted/readeck" "deterred_api_token"))
-(setq deterred-read-it-later-readeck-url "https://readeck.sqrtminusone.xyz/")
-(setq deterred-read-it-later-wallabag-url "https://wallabag.sqrtminusone.xyz/")
-(setq deterred-read-it-later-wallabag-client-id
-      (my/password-store-get-field "Selfhosted/wallabag" "client_id"))
-(setq deterred-read-it-later-wallabag-client-secret
-      (my/password-store-get-field "Selfhosted/wallabag" "client_secret"))
-(setq deterred-read-it-later-wallabag-username
-      (my/password-store-get-field "Selfhosted/wallabag" "username"))
-(setq deterred-read-it-later-wallabag-password
-      (my/password-store-get "Selfhosted/wallabag"))
-#+end_src
+** Should you be deterred from using this?
+Yes.
+
+The package is fine-tuned for my particular purposes and services. Unless you happen to use the same services that I do, or are willing to write your own integrations, you won't extract much value from this. And I most likely won't be able to help with your issues.
+
+I've made the package public because it's easier to install a public Emacs package, and because I publish some of the collected stats on my website.
+
+Also, I don't feel like describing much in the README, although I've been making detailed docs in Elisp. Maybe I'll write a blog post sometime.
+
+So, I guess you're welcome to try, but you're on your own :P
+
+* Development notes
+** Architecture
+The basic project architecture is as follows.
+
+=deterred-source= is the abstract class for data sources. A data source:
+- retrieves data from the outer world and puts it into the database using =deterred-db=;
+- provides an API to display that data, including:
+  - daily summary (one line and a longer one);
+  - a ranged summary;
+  - list of events for a given range;
+
+The database is a plain SQLite file, backed up with =deterred-backup=.
+
+=deterred-dispatcher= is the main UI that provides:
+- the list of sources and their related actions;
+- daily and ranged summaries;
+- entry points to all other functions.
+
+=deterred-dashboard= is the abstract class for dashboards. A dashboard:
+- uses =deterred-db= and the relevant descendants of =deterred-source= to retrieve the datasets. A dataset is a named list of alists with predetermined keys;
+- uses =widget.el= to apply filters;
+- uses matplotlib and org-mode to display the data.
+
+=deterred-timeline= provides a timeline-like display.
+
+** Sync
+=deterred-sync= implements syncing between different machines. Thankfully, this project's syncing requirements are reasonably simple.
+
+Syncing is implemented as follows:
+- This machine's database is copied to a cloud-synced folder.
+- All other databases in the same folder are synced with the current one.
+
+The process itself is implemented via the following strategies:
+- =deterred-sync--replace=: replace the current table with the other if its row count is higher. This works if the table is filled from a datasource outside the machine, e.g. some API that returns the same results everywhere.
+- =deterred-sync--merge-keys=: merge two tables by key attributes;
+- =deterred-sync--merge-hostname=: merge two tables by hostname attribute and timestamp attribute.
+
+This isn't perfect, but for now it adequately covers all the cases I want.
+
+** On using AI
+I wasn't deterred from using AI for writing this package. I had used Claude Code for a few months, but Anthropic has banned me three times because only the U.S. security services are allowed to spy on people (probably). OpenAI has been more cooperative with my self-spycraft.
+
+My experience up to April 2026 is that AI is very useful, but in an importantly limited way.
+
+AI one-shots code close to what it has already seen, like major modes. It also one-shots something given an example. E.g., I've written =deterred-dashboard-activitywatch.el= by hand, and it flawlessly wrote most other dashboards given this example and the API. This has saved days of work.
+
+However, implementing even somewhat complex business logic requires:
+- manual function-by-function verification,
+- or a feedback loop against which the agent could iterate.
+
+And Claude Code provides a much better UI for the former than Codex. The latter was really hard to implement in this project, so, e.g., the following things are fully written by me:
+- syncing algorithms in =deterred-sync.el=, the agent kept breaking the data and failing to read the required algorithms from my mind;
+- parsing hledger's undocumented and convoluted JSON output in =deterred-hledger.el=;
+- time interval arithmetic in =deterred-chains.el=, =deterred-intervals.el=, and all its applications;
+- all the UI: =deterred-timeline.el=, =deterred-dispatcher.el=, etc. AIs just don't know how to write maintainable code with =widget.el=;
+- critical code such as =deterred-backup.el=, =deterred-db.el=;
+- the general architecture of the project, all the interfaces.
+
+And for completeness, several complicated things that AI was able to implement successfully:
+- make datasources given the raw data and the package API. This is most of =deterred-messengers.el=, also =deterred-fit.el=, =deterred-ai.el=, and a few other files;
+- export messenger chats into ODT in =deterred-messengers-telega-export.el=. I would have spent days figuring that out by myself;
+
+AI also likes to write inefficient and complicated code, e.g. O(n^2), O(n^3) looops that could've been O(n) or O(n*log(n)). It's getting better over time, but I still feel I do better. It doesn't help that Emacs is very sensitive to bad code when processing millions of rows.
+
+And, when writing from scratch, AI likes to write very verbose code, with lots of comments, with patterns that are popular and understandable instead of optimal, as if the code is written by a learner still missing something important about programming.
+
+So, tl;dr so far is: AI was essential in writing this, and I would have never made a hobby project this complex without it, but I'm still unique and irreplaceable.
 
 * Datasources
-| Name               | Status | Source                         |
-|--------------------+--------+--------------------------------|
-| [[https://github.com/ActivityWatch/activitywatch][ActivityWatch]]      | +      | API                            |
-| [[https://github.com/AntennaPod/AntennaPod][AntennaPod]]         | +      | Database (SQLite)              |
-| [[https://orgmode.org/manual/Tracking-your-habits.html][org-habit]]          | +      | Org files                      |
-| [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]]   | +      | Database                       |
-| [[https://joinmastodon.org/][Mastodon]]           | +      | API                            |
-| [[https://www.musicpd.org/][MPD]]                | +      | Daemon, CSV                    |
-| [[https://telegram.org/][Telegram]]           | +      | JSON dump, telega.el           |
-| [[https://wakatime.com/][WakaTime]]           | +      | JSON dump, API                 |
-| [[https://www.digikam.org/][digiKam]]            | +      | Database (SQLite)              |
-| [[https://readeck.org/en/][Readeck]]            | +      | API                            |
-| [[https://wallabag.org/][Wallabag]]           | +      | API                            |
-| [[https://reddit.com/][Reddit]]             | +      | CSV dump                       |
-| [[https://podorozhnik.spb.ru/][Подорожник]]         | +      |                                |
-| hledger            | +      | CLI                            |
-| Discord            | +      | dumps                          |
-| org-roam           | +      | Database + git                 |
-| Rocket.Chat        |        | API                            |
-| Claude Code        |        | [[https://github.com/ryoppippi/ccusage][ccusage]], jsonl, maybe a plugin |
-| [[https://manifold.markets/][Manifold]]           |        | API                            |
-| org-agenda         |        | Org files                      |
-| [[https://open-meteo.com/][Open Meteo]] ([[https://github.com/SqrtMinusOne/biome][BIOME]]) |        | API                            |
+The implemented sources are as follows:
 
-* Plans
-Interfaces:
-- [X] Generalize daily summary to range summary where possible (e.g. weekly summary)
-- [ ] Event list per day
+| Name             | Datasource                  | Source               |
+|------------------+-----------------------------+----------------------|
+| [[https://github.com/ActivityWatch/activitywatch][ActivityWatch]]    | =deterred-activitywatch=    | API, CSV             |
+| [[https://github.com/AntennaPod/AntennaPod][AntennaPod]]       | =deterred-podcasts=         | Database (SQLite)    |
+| [[https://orgmode.org/manual/Tracking-your-habits.html][org-habit]]        | =deterred-habit=            | Org files            |
+| [[https://github.com/SqrtMinusOne/org-journal-tags][org-journal-tags]] | =deterred-org-journal-tags= | Org files            |
+| [[https://joinmastodon.org/][Mastodon]]         | =deterred-social=           | API                  |
+| [[https://www.musicpd.org/][MPD]]              | =deterred-mpd=              | Daemon, CSV          |
+| [[https://telegram.org/][Telegram]]         | =deterred-messengers=       | JSON dump, [[https://github.com/zevlg/telega.el][telega.el]] |
+| [[https://wakatime.com/][WakaTime]]         | =deterred-wakatime=         | JSON dump, API       |
+| [[https://www.digikam.org/][digiKam]]          | =deterred-digikam=          | Database (SQLite)    |
+| [[https://readeck.org/en/][Readeck]]          | =deterred-read-it-later=    | API                  |
+| [[https://wallabag.org/][Wallabag]]         | =deterred-read-it-later=    | API                  |
+| [[https://reddit.com/][Reddit]]           | =deterred-social=           | CSV dump             |
+| [[https://podorozhnik.spb.ru/][Подорожник]]       | =deterred-transport=        | API                  |
+| [[https://hledger.org/][hledger]]          | =deterred-hledger=          | CLI                  |
+| [[https://discord.com/][Discord]]          | =deterred-messengers=       | Dumps                |
+| [[https://www.orgroam.com/][org-roam]]         | =deterred-org-roam=         | Org files + git      |
+| [[https://claude.com/product/claude-code][Claude Code]]      | =deterred-ai=               | State folder         |
+| [[https://openai.com/codex/][OpenAI Codex]]     | =deterred-ai=               | State folder         |
+| [[https://orgmode.org/manual/Clocking-commands.html][org-clock]]        | =deterred-org-clock=        | Org files            |
+| [[https://developer.garmin.com/fit/protocol/][FIT files]]        | =deterred-fit=              | FIT files            |
+| Locations data   | =deterred-locations=        | Manual edit          |
 
-Edit UI for:
-- [ ] Location edit UI
-- [ ] Location check UI via digiKam
-- [ ] Album location edit UI
-- [ ] MPD song language edit UI
-- [ ] Read It Later host language edit UI
-- [ ] Hostname category edit UI
+See the docs in the relevant files for more information.
 
-Meta:
-- [ ] Add datasets. They'll only load data but not integrate with the dispatcher.
-- [ ] Common dialog for SQL errors
-- [X] Common dialog for request errors
-- [X] Extract faces?
-- [ ] Maybe not throw an error if there isn't a location.
-- [X] Auto-run backups on start
-- [X] Sync
+* Other projects
+- Simon Willison's [[https://datasette.io/][Datasette]] can also analyse SQLite databases. He also created [[https://dogsheep.github.io/][Dogsheep]] to ingest personal data.
+- See also Karl Voit's [[https://github.com/novoid/Memacs][Memacs]].
 
-Dashboards:
-- [X] MPD
-- [X] Podcasts
-- [X] WakaTime
-- [X] ActivityWatch
-- [X] Read it Later
-- [X] Photos
-- [X] Org Journal
-- [X] Messengers
-- [ ] Social: VK posts, Reddit, Mastodon, Discord, Manifold
-
-Read it Later:
-- [X] Source language UI?
-
-Datasets:
-- Parse Twitter http://web.archive.org/web/20230103104809/https://twitter.com/sqrtminustwo
-- =books.org= file?
-
-MPD:
-- [X] fix timestamps migrated
-- [X] fix missing records before 2025-03-29
-
-ActivityWatch:
-- [X] Load from CSV for the old =sqrt-data=
-- [X] Load for the database.
-- [ ] Extract hostnames into a category (laptop/desktop)
-
-Messengers:
-- [X] Load VK dump
-- [ ] Time in work chats
-
-WakaTime:
-- [X] Integrate with dired
-
-Claude Code:
-- Reference https://github.com/wakatime/claude-code-wakatime.git to make a plugin?
-
-Misc ideas:
-- Measure productivity with Claude Code and without
+* Random plans
+** Edit UI
+I edit a bunch of tables via DBeaver. I'd like a general edit UI to edit the following:
+- The locations table
+- Album locations
+- MPD song language
+- Read It Later host language
+- Hostname category
+** General reliability
+- Maybe not throw an error if there isn't a location at a given time?
+- Add a common dialog for SQL errors
+- I clearly need to profile SQLite queries
+** Datasources
+- Rocket.Chat
+- Manifold
