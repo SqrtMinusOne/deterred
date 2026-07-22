@@ -47,13 +47,14 @@ Return 3 datasets, each having three columns:
       ((ai-usage-raw
         (deterred-db-select-template-alist
          db
-         "SELECT timestamp
-FROM ai_usage_item
+         "SELECT MIN(timestamp) timestamp
+FROM ai_usage_effective
 WHERE is_stats = 0
   [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
-  [[AND model_name IN :model]]"
+  [[AND model_name IN :model]]
+GROUP BY COALESCE(turn_key, message_id)"
          params))
        (ai-usage (car (deterred-chains-normalize
                        (list
@@ -163,21 +164,19 @@ WHERE 1 = 1
           (mapcar
            (lambda (item) (alist-get 'hostname item))
            (deterred-db-select-alist
-            db "SELECT DISTINCT hostname FROM ai_usage_item
-WHERE is_stats = 0 ORDER BY hostname")))
+            db "SELECT DISTINCT hostname FROM ai_usage_effective ORDER BY hostname")))
          (models
           (mapcar
            (lambda (item) (alist-get 'model_name item))
            (deterred-db-select-alist
-            db "SELECT DISTINCT model_name FROM ai_usage_item
-WHERE is_stats = 0 ORDER BY model_name")))
+            db "SELECT DISTINCT model_name FROM ai_usage_effective ORDER BY model_name")))
          (projects
           (mapcar
            (lambda (datum) (cons (alist-get 'name datum)
                                  (alist-get 'id datum)))
            (deterred-db-select-alist
             db "SELECT wp.id, wp.name FROM wakatime_projects wp
-WHERE wp.id IN (SELECT DISTINCT project_id FROM ai_usage_item
+WHERE wp.id IN (SELECT DISTINCT project_id FROM ai_usage_effective
                 WHERE project_id IS NOT NULL AND is_stats = 0)
 ORDER BY wp.name"))))
     (deterred-dashboard-widget-completing-read-multiple
@@ -214,13 +213,13 @@ ORDER BY wp.name"))))
     (tokens-by-model-per-day (name . "Tokens by model per day"))
     (tokens-by-model-per-week (name . "Tokens by model per week"))
     (tokens-by-model-per-month (name . "Tokens by model per month"))
-    (messages-by-model-per-week (name . "Messages by model per week"))
-    (messages-by-model-per-month (name . "Messages by model per month"))
-    (messages-by-hostname-per-day (name . "Messages by hostname per day"))
-    (messages-by-hostname-per-week (name . "Messages by hostname per week"))
-    (messages-by-hostname-per-month (name . "Messages by hostname per month"))
-    (avg-cost-per-message-per-month (name . "Average cost per message per month"))
-    (recent-messages (name . "Recent messages by time of day"))
+    (messages-by-model-per-week (name . "Model requests per week"))
+    (messages-by-model-per-month (name . "Model requests per month"))
+    (messages-by-hostname-per-day (name . "Turns/messages by hostname per day"))
+    (messages-by-hostname-per-week (name . "Turns/messages by hostname per week"))
+    (messages-by-hostname-per-month (name . "Turns/messages by hostname per month"))
+    (avg-cost-per-message-per-month (name . "Average priced cost per turn/message per month"))
+    (recent-messages (name . "Recent turn/message activity"))
     (top-files (name . "Top files by AI changes"))
     (top-days-by-cost (name . "Top days by cost"))
     (top-days-by-tokens (name . "Top days by tokens"))
@@ -239,8 +238,8 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
            db
            "SELECT (
   SELECT ROUND(SUM(usd_cost) / 1000000.0, 2)
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
@@ -248,8 +247,8 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
 ) AS total_cost,
 (
   SELECT SUM(total_tokens)
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
@@ -257,17 +256,81 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
 ) AS total_tokens,
 (
   SELECT COUNT(*)
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  FROM ai_usage_effective
+  WHERE pricing_status = 'unknown'
+    AND total_tokens > 0
+    [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
     [[AND project_id IN :projects]]
-) AS msg_count,
+) AS unknown_pricing_rows,
+(
+  SELECT COALESCE(SUM(total_tokens), 0)
+  FROM ai_usage_effective
+  WHERE pricing_status = 'unknown'
+    AND total_tokens > 0
+    [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS unknown_pricing_tokens,
+(
+  SELECT COALESCE(SUM(request_count), 0)
+  FROM ai_usage_effective
+  WHERE pricing_status = 'unknown'
+    AND total_tokens > 0
+    [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS unknown_pricing_requests,
+(
+  SELECT COUNT(DISTINCT CASE
+           WHEN is_stats = 0
+           THEN turn_key END)
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS known_turn_count,
+(
+  SELECT COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS estimated_message_count,
+(
+  SELECT COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0)
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS request_count,
+(
+  SELECT COUNT(*)
+  FROM ai_usage_effective
+  WHERE is_stats = 0
+    AND turn_key IS NULL
+    [[AND timestamp >= :start-date]]
+    [[AND timestamp <= :end-date]]
+    [[AND hostname IN :hostname]]
+    [[AND model_name IN :model]]
+    [[AND project_id IN :projects]]
+) AS legacy_record_count,
 (
   SELECT COUNT(DISTINCT model_name)
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
@@ -275,17 +338,17 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
 ) AS model_count,
 (
   SELECT COUNT(DISTINCT hostname)
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
     [[AND project_id IN :projects]]
 ) AS hostname_count,
 (
-  SELECT COUNT(DISTINCT date(timestamp, 'unixepoch'))
-  FROM ai_usage_item
-  WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  SELECT COUNT(DISTINCT COALESCE(usage_date, date(timestamp, 'unixepoch')))
+  FROM ai_usage_effective
+  WHERE 1 = 1 [[AND timestamp >= :start-date]]
     [[AND timestamp <= :end-date]]
     [[AND hostname IN :hostname]]
     [[AND model_name IN :model]]
@@ -294,33 +357,45 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
            params))
          (total-cost (alist-get 'total_cost (car numbers-data))))
     `((top-models
-       . ,(deterred-utils-add-fraction
-           (deterred-db-select-template-alist
-            db
-            "SELECT
+       . ,(let ((rows
+                 (deterred-db-select-template-alist
+                  db
+                  "SELECT
   model_name,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost,
   SUM(total_tokens) tokens,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages,
+  COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0) requests,
+  SUM(CASE WHEN is_stats = 0 AND turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
 GROUP BY model_name
 ORDER BY cost DESC"
-            params)
-           total-cost 'cost))
+                  params)))
+            (if (and (numberp total-cost) (> total-cost 0))
+                (deterred-utils-add-fraction rows total-cost 'cost)
+              rows)))
       (top-projects
        . ,(deterred-db-select-template-alist
            db
            "SELECT
   wp.name project_name,
-  COUNT(*) messages,
+  COUNT(DISTINCT CASE WHEN i.is_stats = 0 THEN i.turn_key END)
+    turn_messages,
+  COALESCE(SUM(i.request_count), 0) requests,
+  SUM(CASE WHEN i.turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records,
   ROUND(SUM(i.usd_cost) / 1000000.0, 2) cost,
   SUM(i.total_tokens) tokens
-FROM ai_usage_item i
+FROM ai_usage_effective i
 INNER JOIN wakatime_projects wp ON wp.id = i.project_id
 WHERE i.is_stats = 0
   AND i.project_id IS NOT NULL
@@ -340,191 +415,213 @@ LIMIT 30"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  date(timestamp, 'unixepoch') day,
+  COALESCE(usage_date, date(timestamp, 'unixepoch')) day,
   model_name,
   ROUND(SUM(usd_cost) / 1000000.0, 4) cost
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY date(timestamp, 'unixepoch'), model_name
+GROUP BY COALESCE(usage_date, date(timestamp, 'unixepoch')), model_name
 ORDER BY day ASC"
            params))
       (cost-by-model-per-week
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', timestamp, 'unixepoch') week,
+  strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))) week,
   model_name,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%W', timestamp, 'unixepoch'), model_name
+GROUP BY strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))), model_name
 ORDER BY week ASC"
            params))
       (cost-by-model-per-month
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
   model_name,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch'), model_name
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7), model_name
 ORDER BY month ASC"
            params))
       (tokens-by-model-per-day
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  date(timestamp, 'unixepoch') day,
+  COALESCE(usage_date, date(timestamp, 'unixepoch')) day,
   model_name,
   SUM(total_tokens) tokens
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY date(timestamp, 'unixepoch'), model_name
+GROUP BY COALESCE(usage_date, date(timestamp, 'unixepoch')), model_name
 ORDER BY day ASC"
            params))
       (tokens-by-model-per-week
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', timestamp, 'unixepoch') week,
+  strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))) week,
   model_name,
   SUM(total_tokens) tokens
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%W', timestamp, 'unixepoch'), model_name
+GROUP BY strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))), model_name
 ORDER BY week ASC"
            params))
       (tokens-by-model-per-month
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
   model_name,
   SUM(total_tokens) tokens
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch'), model_name
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7), model_name
 ORDER BY month ASC"
            params))
       (messages-by-model-per-week
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', timestamp, 'unixepoch') week,
+  strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))) week,
   model_name,
-  COUNT(*) messages
-FROM ai_usage_item
+  COALESCE(SUM(request_count), 0) requests
+FROM ai_usage_effective
 WHERE is_stats = 0 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%W', timestamp, 'unixepoch'), model_name
+GROUP BY strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))), model_name
 ORDER BY week ASC"
            params))
       (messages-by-model-per-month
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
   model_name,
-  COUNT(*) messages
-FROM ai_usage_item
+  COALESCE(SUM(request_count), 0) requests
+FROM ai_usage_effective
 WHERE is_stats = 0 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch'), model_name
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7), model_name
 ORDER BY month ASC"
            params))
       (messages-by-hostname-per-day
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  date(timestamp, 'unixepoch') day,
+  COALESCE(usage_date, date(timestamp, 'unixepoch')) day,
   hostname,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY date(timestamp, 'unixepoch'), hostname
+GROUP BY COALESCE(usage_date, date(timestamp, 'unixepoch')), hostname
 ORDER BY day ASC"
            params))
       (messages-by-hostname-per-week
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', timestamp, 'unixepoch') week,
+  strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))) week,
   hostname,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%W', timestamp, 'unixepoch'), hostname
+GROUP BY strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))), hostname
 ORDER BY week ASC"
            params))
       (messages-by-hostname-per-month
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
   hostname,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch'), hostname
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7), hostname
 ORDER BY month ASC"
            params))
       (avg-cost-per-message-per-month
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
-  ROUND(SUM(usd_cost) / 1000000.0 / COUNT(*), 4) avg_cost
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
+  ROUND(SUM(CASE
+      WHEN pricing_status IN ('priced', 'historical')
+        AND ((is_stats = 0 AND turn_key IS NOT NULL) OR is_stats = 1)
+      THEN usd_cost ELSE 0 END) / 1000000.0 /
+    NULLIF(COUNT(DISTINCT CASE
+      WHEN is_stats = 0
+        AND pricing_status IN ('priced', 'historical')
+      THEN turn_key END)
+      + COALESCE(SUM(CASE
+          WHEN is_stats = 1
+            AND pricing_status IN ('priced', 'historical')
+          THEN message_count ELSE 0 END), 0), 0), 4)
+    avg_cost
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch')
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7)
+HAVING avg_cost IS NOT NULL
 ORDER BY month ASC"
            params))
       (recent-messages
@@ -533,8 +630,9 @@ ORDER BY month ASC"
            "SELECT
   timestamp,
   model_name,
-  usd_cost / 1000000.0 cost
-FROM ai_usage_item
+  usd_cost / 1000000.0 cost,
+  pricing_status
+FROM ai_usage_effective
 WHERE is_stats = 0
   AND timestamp >= COALESCE(:end-date, strftime('%s', 'now')) - :recent-days * 86400
   [[AND timestamp >= :start-date]]
@@ -549,12 +647,13 @@ ORDER BY timestamp ASC"
            db
            "SELECT
   f.file_path,
-  COUNT(DISTINCT f.message_id) messages,
+  COUNT(DISTINCT COALESCE(f.turn_key, f.message_id)) turns,
+  SUM(f.touch_count) touches,
   COALESCE(SUM(f.lines_added), 0) lines_added,
   COALESCE(SUM(f.lines_removed), 0) lines_removed,
   COALESCE(SUM(f.lines_added), 0) + COALESCE(SUM(f.lines_removed), 0) total_changes
 FROM ai_usage_file f
-INNER JOIN ai_usage_item i ON i.message_id = f.message_id
+INNER JOIN ai_usage_effective i ON i.message_id = f.message_id
 WHERE i.is_stats = 0
   [[AND i.timestamp >= :start-date]]
   [[AND i.timestamp <= :end-date]]
@@ -569,17 +668,23 @@ LIMIT 30"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  date(timestamp, 'unixepoch') day,
+  COALESCE(usage_date, date(timestamp, 'unixepoch')) day,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost,
   SUM(total_tokens) tokens,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages,
+  COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0) requests,
+  SUM(CASE WHEN is_stats = 0 AND turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY date(timestamp, 'unixepoch')
+GROUP BY COALESCE(usage_date, date(timestamp, 'unixepoch'))
 ORDER BY cost DESC
 LIMIT 20"
            params))
@@ -587,17 +692,23 @@ LIMIT 20"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  date(timestamp, 'unixepoch') day,
+  COALESCE(usage_date, date(timestamp, 'unixepoch')) day,
   SUM(total_tokens) tokens,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages,
+  COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0) requests,
+  SUM(CASE WHEN is_stats = 0 AND turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY date(timestamp, 'unixepoch')
+GROUP BY COALESCE(usage_date, date(timestamp, 'unixepoch'))
 ORDER BY tokens DESC
 LIMIT 20"
            params))
@@ -605,17 +716,23 @@ LIMIT 20"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%W', timestamp, 'unixepoch') week,
+  strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch'))) week,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost,
   SUM(total_tokens) tokens,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages,
+  COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0) requests,
+  SUM(CASE WHEN is_stats = 0 AND turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%W', timestamp, 'unixepoch')
+GROUP BY strftime('%Y-%W', COALESCE(usage_date, date(timestamp, 'unixepoch')))
 ORDER BY cost DESC
 LIMIT 20"
            params))
@@ -623,17 +740,23 @@ LIMIT 20"
        . ,(deterred-db-select-template-alist
            db
            "SELECT
-  strftime('%Y-%m', timestamp, 'unixepoch') month,
+  substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7) month,
   ROUND(SUM(usd_cost) / 1000000.0, 2) cost,
   SUM(total_tokens) tokens,
-  COUNT(*) messages
-FROM ai_usage_item
-WHERE is_stats = 0 [[AND timestamp >= :start-date]]
+  COUNT(DISTINCT CASE
+    WHEN is_stats = 0 THEN turn_key END)
+    + COALESCE(SUM(CASE WHEN is_stats = 1 THEN message_count ELSE 0 END), 0)
+    turn_messages,
+  COALESCE(SUM(CASE WHEN is_stats = 0 THEN request_count ELSE 0 END), 0) requests,
+  SUM(CASE WHEN is_stats = 0 AND turn_key IS NULL
+      THEN 1 ELSE 0 END) legacy_records
+FROM ai_usage_effective
+WHERE 1 = 1 [[AND timestamp >= :start-date]]
   [[AND timestamp <= :end-date]]
   [[AND hostname IN :hostname]]
   [[AND model_name IN :model]]
   [[AND project_id IN :projects]]
-GROUP BY strftime('%Y-%m', timestamp, 'unixepoch')
+GROUP BY substr(COALESCE(usage_date, date(timestamp, 'unixepoch')), 1, 7)
 ORDER BY cost DESC
 LIMIT 20"
            params))
@@ -645,13 +768,31 @@ LIMIT 20"
   ;; Summary
   (insert
    (deterred-format
-    "I've spent $"
+    "Known API-equivalent cost is $"
     (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'total_cost")))
            'bold)
-    " across "
-    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'msg_count")))
+    ". "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'unknown_pricing_tokens")))
            'bold)
-    " messages using "
+    " tokens in "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'unknown_pricing_rows")))
+           'bold)
+    " rows ("
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'unknown_pricing_requests")))
+           'bold)
+    " known requests) have unknown pricing and are excluded. Usage covers "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'known_turn_count")))
+           'bold)
+    " known turns/messages and "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'estimated_message_count")))
+           'bold)
+    " estimated historical messages, representing "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'request_count")))
+           'bold)
+    " model requests. "
+    (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'legacy_record_count")))
+           'bold)
+    " legacy usage records have unknown turn counts. Usage spans "
     (f-ace (f (f-num (f-acc "data->'numbers-data->'data[0]->'model_count")))
            'bold)
     " models on "
@@ -666,7 +807,9 @@ LIMIT 20"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-models data)))
     :column-names '((model_name . "Model") (cost . "Cost ($)")
-                    (tokens . "Tokens") (messages . "Messages")
+                    (tokens . "Tokens") (turn_messages . "Turns/messages")
+                    (requests . "Requests")
+                    (legacy_records . "Legacy records")
                     (fraction . "%"))
     :max-rows 10
     :grid-button t)
@@ -676,7 +819,9 @@ LIMIT 20"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-projects data)))
     :column-names '((project_name . "Project") (cost . "Cost ($)")
-                    (tokens . "Tokens") (messages . "Messages"))
+                    (tokens . "Tokens") (turn_messages . "Turns/messages")
+                    (requests . "Requests")
+                    (legacy_records . "Legacy records"))
     :max-rows 15
     :grid-button t)
    "\n"
@@ -931,8 +1076,8 @@ print(json.dumps(images))"
        (insert (deterred-format (f-h3 "Tokens by model per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
        (insert "\n"))))
-  ;; Messages charts
-  (insert (deterred-format (f-h2 "Messages") "\n"))
+  ;; Request and turn/message charts
+  (insert (deterred-format (f-h2 "Requests and turns/messages") "\n"))
   (deterred-dashboard-exec-python
    :python-code
    "from matplotlib import pyplot as plt
@@ -953,10 +1098,10 @@ images = []
 
 if not df_model_week.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
-    df_pivot = df_model_week.pivot(index='week', columns='model_name', values='messages').fillna(0)
+    df_pivot = df_model_week.pivot(index='week', columns='model_name', values='requests').fillna(0)
     df_pivot.plot(ax=ax, kind='bar', stacked=True)
-    ax.set_title('Messages by model per week')
-    ax.set_ylabel('Messages')
+    ax.set_title('Model requests per week')
+    ax.set_ylabel('Requests')
     if len(df_pivot) > 30:
         ax.xaxis.set_major_locator(MaxNLocator(nbins=30))
     plt.xticks(rotation=45, ha='right')
@@ -967,10 +1112,10 @@ else:
 
 if not df_model_month.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
-    df_pivot = df_model_month.pivot(index='month', columns='model_name', values='messages').fillna(0)
+    df_pivot = df_model_month.pivot(index='month', columns='model_name', values='requests').fillna(0)
     df_pivot.plot(ax=ax, kind='bar', stacked=True)
-    ax.set_title('Messages by model per month')
-    ax.set_ylabel('Messages')
+    ax.set_title('Model requests per month')
+    ax.set_ylabel('Requests')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     images.append(fig_to_b64(fig))
@@ -979,10 +1124,10 @@ else:
 
 if not df_host_day.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
-    df_pivot = df_host_day.pivot(index='day', columns='hostname', values='messages').fillna(0)
+    df_pivot = df_host_day.pivot(index='day', columns='hostname', values='turn_messages').fillna(0)
     df_pivot.plot(ax=ax, kind='bar', stacked=True)
-    ax.set_title('Messages by hostname per day')
-    ax.set_ylabel('Messages')
+    ax.set_title('Turns/messages by hostname per day')
+    ax.set_ylabel('Turns/messages')
     if len(df_pivot) > 30:
         ax.xaxis.set_major_locator(MaxNLocator(nbins=30))
     plt.xticks(rotation=45, ha='right')
@@ -993,10 +1138,10 @@ else:
 
 if not df_host_week.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
-    df_pivot = df_host_week.pivot(index='week', columns='hostname', values='messages').fillna(0)
+    df_pivot = df_host_week.pivot(index='week', columns='hostname', values='turn_messages').fillna(0)
     df_pivot.plot(ax=ax, kind='bar', stacked=True)
-    ax.set_title('Messages by hostname per week')
-    ax.set_ylabel('Messages')
+    ax.set_title('Turns/messages by hostname per week')
+    ax.set_ylabel('Turns/messages')
     if len(df_pivot) > 30:
         ax.xaxis.set_major_locator(MaxNLocator(nbins=30))
     plt.xticks(rotation=45, ha='right')
@@ -1007,10 +1152,10 @@ else:
 
 if not df_host_month.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
-    df_pivot = df_host_month.pivot(index='month', columns='hostname', values='messages').fillna(0)
+    df_pivot = df_host_month.pivot(index='month', columns='hostname', values='turn_messages').fillna(0)
     df_pivot.plot(ax=ax, kind='bar', stacked=True)
-    ax.set_title('Messages by hostname per month')
-    ax.set_ylabel('Messages')
+    ax.set_title('Turns/messages by hostname per month')
+    ax.set_ylabel('Turns/messages')
     plt.xticks(rotation=45, ha='right')
     plt.tight_layout()
     images.append(fig_to_b64(fig))
@@ -1022,23 +1167,23 @@ print(json.dumps(images))"
    :on-success
    (lambda (images)
      (when (elt images 0)
-       (insert (deterred-format (f-h3 "Messages by model per week") "\n"))
+       (insert (deterred-format (f-h3 "Model requests per week") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 0))
        (insert "\n"))
      (when (elt images 1)
-       (insert (deterred-format (f-h3 "Messages by model per month") "\n"))
+       (insert (deterred-format (f-h3 "Model requests per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 1))
        (insert "\n"))
      (when (elt images 2)
-       (insert (deterred-format (f-h3 "Messages by hostname per day") "\n"))
+       (insert (deterred-format (f-h3 "Turns/messages by hostname per day") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
        (insert "\n"))
      (when (elt images 3)
-       (insert (deterred-format (f-h3 "Messages by hostname per week") "\n"))
+       (insert (deterred-format (f-h3 "Turns/messages by hostname per week") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 3))
        (insert "\n"))
      (when (elt images 4)
-       (insert (deterred-format (f-h3 "Messages by hostname per month") "\n"))
+       (insert (deterred-format (f-h3 "Turns/messages by hostname per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 4))
        (insert "\n"))))
   ;; Activity charts
@@ -1059,11 +1204,11 @@ df_recent = pd.DataFrame(data['recent-messages']['data'])
 
 images = []
 
-# Average cost per message per month (line)
+# Average cost per known turn/message per month (line)
 if not df_avg_cost.empty:
     fig, ax = plt.subplots(figsize=(10, 5))
     df_avg_cost.plot(ax=ax, kind='line', x='month', y='avg_cost', legend=False)
-    ax.set_title('Average cost per message per month ($)')
+    ax.set_title('Average priced cost per turn/message per month ($)')
     ax.set_ylabel('Avg cost ($)')
     ax.set_xlabel('Month')
     plt.xticks(rotation=45, ha='right')
@@ -1116,7 +1261,7 @@ print(json.dumps(images))"
    :on-success
    (lambda (images)
      (when (elt images 0)
-       (insert (deterred-format (f-h3 "Average cost per message per month") "\n"))
+       (insert (deterred-format (f-h3 "Average priced cost per turn/message per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 0))
        (insert "\n"))
      (when (elt images 1)
@@ -1128,7 +1273,8 @@ print(json.dumps(images))"
    (deterred-format (f-h2 "Top files by AI changes") "\n")
    (deterred-grid-print-with-org
     (alist-get 'data (alist-get 'top-files data))
-    :column-names '((file_path . "File") (messages . "Messages")
+    :column-names '((file_path . "File") (turns . "Turns/messages")
+                    (touches . "Touches")
                     (lines_added . "+ Lines") (lines_removed . "- Lines")
                     (total_changes . "Total"))
     :max-rows 20
@@ -1143,7 +1289,8 @@ print(json.dumps(images))"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-months data)))
     :column-names '((month . "Month") (cost . "Cost ($)")
-                    (tokens . "Tokens") (messages . "Messages"))
+                    (tokens . "Tokens") (turn_messages . "Turns/messages")
+                    (requests . "Requests") (legacy_records . "Legacy records"))
     :max-rows 10
     :grid-button t)
    "\n"
@@ -1152,7 +1299,8 @@ print(json.dumps(images))"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-weeks data)))
     :column-names '((week . "Week") (cost . "Cost ($)")
-                    (tokens . "Tokens") (messages . "Messages"))
+                    (tokens . "Tokens") (turn_messages . "Turns/messages")
+                    (requests . "Requests") (legacy_records . "Legacy records"))
     :max-rows 10
     :grid-button t)
    "\n"
@@ -1161,7 +1309,8 @@ print(json.dumps(images))"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-days-by-cost data)))
     :column-names '((day . "Day") (cost . "Cost ($)")
-                    (tokens . "Tokens") (messages . "Messages"))
+                    (tokens . "Tokens") (turn_messages . "Turns/messages")
+                    (requests . "Requests") (legacy_records . "Legacy records"))
     :max-rows 10
     :grid-button t)
    "\n"
@@ -1170,7 +1319,8 @@ print(json.dumps(images))"
     (deterred-dashboard-ai--format-tokens-column
      (alist-get 'data (alist-get 'top-days-by-tokens data)))
     :column-names '((day . "Day") (tokens . "Tokens")
-                    (cost . "Cost ($)") (messages . "Messages"))
+                    (cost . "Cost ($)") (turn_messages . "Turns/messages")
+                    (requests . "Requests") (legacy_records . "Legacy records"))
     :max-rows 10
     :grid-button t)
    "\n"))

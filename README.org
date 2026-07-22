@@ -91,7 +91,7 @@ AI also likes to write inefficient and complicated code, e.g. O(n^2), O(n^3) loo
 
 And, when writing from scratch, AI likes to write very verbose code, with lots of comments, with patterns that are popular and understandable instead of optimal, as if the code is written by a learner still missing something important about programming.
 
-So, tl;dr so far is: AI was essential in writing this, and I would have never made a hobby project this complex without it, but I'm still unique and irreplaceable.
+So, tl;dr so far is: AI was essential in writing this, and I would have never made such a complex hobby project without it, but I'm still unique and irreplaceable.
 
 * Datasources
 The implemented sources are as follows:
@@ -125,6 +125,7 @@ See the docs in the relevant files for more information.
 * Other projects
 - Simon Willison's [[https://datasette.io/][Datasette]] can also analyse SQLite databases. He also created [[https://dogsheep.github.io/][Dogsheep]] to ingest personal data.
 - See also Karl Voit's [[https://github.com/novoid/Memacs][Memacs]].
+- Also [[https://activitywatch.net/][ActivityWatch]] is usable by itself.
 
 * Random plans
 ** Edit UI
@@ -141,3 +142,5 @@ I edit a bunch of tables via DBeaver. I'd like a general edit UI to edit the fol
 ** Datasources
 - Rocket.Chat
 - Manifold
+** Integrations
+- Abstract way the dired-wakatime integration, then somehow integrate my filesystem index with org-clock

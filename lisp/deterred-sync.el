@@ -55,6 +55,8 @@
 ;; - `deterred-sync--merge-hostname' - add records from the other
 ;;   table to the current by using a hostname attribute and a
 ;;   timestamp attribute.
+;; - `deterred-sync--ai-usage' - replace only AI slices that the other
+;;   database explicitly marks authoritative, and append otherwise.
 ;;
 ;; Each strategy has its purpose.  The replace strategy only works if
 ;; a table is filled from a datasource outside the machine, e.g. as it
@@ -139,9 +141,7 @@
                            wakatime_machines wakatime_operating_systems
                            wakatime_projects))
     ;; `deterred-ai'
-    (merge-hostname :table-name ai_usage_item)
-    (merge-keys :table-name ai_usage_file
-                :key-attrs (message_id file_path))
+    (ai-usage :table-names (ai_usage_item ai_usage_file))
     (merge-hostname :table-name ai_accepted_completions))
   "The order of sync strategy application for DETERRED.
 
@@ -155,6 +155,7 @@ See the comments in the `deterred-sync' package for more detail.")
 
 (defconst deterred-sync-strategies
   '((merge-hostname . deterred-sync--merge-hostname)
+    (ai-usage . deterred-sync--ai-usage)
     (replace . deterred-sync--replace)
     (merge-keys . deterred-sync--merge-keys)
     (merge-with-extra-keys . deterred-sync--merge-with-extra-keys))
@@ -360,6 +361,324 @@ syncing."
       (if dry-run
           (display-buffer log-buffer)
         (kill-buffer log-buffer)))))
+
+(defun deterred-sync--table-exists-p (db schema table-name)
+  "Return non-nil when TABLE-NAME exists in SCHEMA of DB."
+  (> (caar
+      (sqlite-select
+       db
+       (format "SELECT COUNT(*) FROM %s.sqlite_master
+WHERE type = 'table' AND name = ?" schema)
+       (list (deterred-utils-ensure-string table-name))))
+     0))
+
+(defun deterred-sync--ai-log (log-buffer format-string &rest args)
+  "Write FORMAT-STRING and ARGS to LOG-BUFFER when it is non-nil."
+  (when log-buffer
+    (with-current-buffer log-buffer
+      (insert (apply #'format format-string args)))))
+
+(defun deterred-sync--ai-copy-pricing-revisions
+    (db hostname dry-run log-buffer)
+  "Copy pricing revisions needed by HOSTNAME's AI rows into DB.
+
+Only revisions referenced by rows in other_db are considered.  When
+DRY-RUN is non-nil, report how many missing revisions would be copied
+without changing DB."
+  (when (deterred-sync--table-exists-p
+         db "other_db" 'meta_ai_pricing_revision)
+    (let ((missing-count
+           (caar
+            (sqlite-select
+             db
+             "SELECT COUNT(DISTINCT i.pricing_revision_id)
+FROM other_db.ai_usage_item i
+LEFT JOIN main.meta_ai_pricing_revision m
+  ON m.pricing_revision_id = i.pricing_revision_id
+WHERE i.hostname = ?
+  AND i.pricing_revision_id IS NOT NULL
+  AND m.pricing_revision_id IS NULL"
+             (list hostname)))))
+      (deterred-sync--ai-log
+       log-buffer "  Pricing revisions for %s: copy %d missing rows\n"
+       hostname missing-count)
+      (unless (or dry-run (= missing-count 0))
+        (sqlite-execute
+         db
+         "INSERT OR IGNORE INTO main.meta_ai_pricing_revision
+SELECT DISTINCT r.*
+FROM other_db.meta_ai_pricing_revision r
+INNER JOIN other_db.ai_usage_item i
+  ON i.pricing_revision_id = r.pricing_revision_id
+WHERE i.hostname = ?"
+         (list hostname))
+        (let ((unresolved-count
+               (caar
+                (sqlite-select
+                 db
+                 "SELECT COUNT(DISTINCT i.pricing_revision_id)
+FROM other_db.ai_usage_item i
+LEFT JOIN main.meta_ai_pricing_revision m
+  ON m.pricing_revision_id = i.pricing_revision_id
+WHERE i.hostname = ?
+  AND i.pricing_revision_id IS NOT NULL
+  AND m.pricing_revision_id IS NULL"
+                 (list hostname)))))
+          (unless (= unresolved-count 0)
+            (error "Could not copy %d AI pricing revisions for %s"
+                   unresolved-count hostname)))))))
+
+(defun deterred-sync--ai-replace-authoritative-slice
+    (db hostname provider record-kind dry-run log-buffer)
+  "Replace one authoritative AI usage slice from other_db in DB.
+
+HOSTNAME, PROVIDER and RECORD-KIND identify the incoming slice.  A
+Codex turn slice also supersedes legacy token-event rows.  When
+DRY-RUN is non-nil, report counts to LOG-BUFFER without changing DB."
+  (let* ((delete-kinds (if (and (equal provider "codex")
+                                (equal record-kind "codex-turn-model"))
+                           '("codex-turn-model" "legacy-token-event")
+                         (list record-kind)))
+         (kind-placeholders (mapconcat (lambda (_) "?") delete-kinds ", "))
+         (delete-values (append (list hostname provider) delete-kinds))
+         (delete-item-where
+          (format "hostname = ? AND provider = ? AND record_kind IN (%s)"
+                  kind-placeholders))
+         (delete-file-count
+          (caar
+           (sqlite-select
+            db
+            (format "SELECT COUNT(*)
+FROM main.ai_usage_file f
+INNER JOIN main.ai_usage_item i ON i.message_id = f.message_id
+WHERE i.%s" delete-item-where)
+            delete-values)))
+         (delete-item-count
+          (caar
+           (sqlite-select
+            db
+            (format "SELECT COUNT(*) FROM main.ai_usage_item WHERE %s"
+                    delete-item-where)
+            delete-values)))
+         (insert-item-count
+          (caar
+           (sqlite-select
+            db
+            "SELECT COUNT(*) FROM other_db.ai_usage_item
+WHERE hostname = ? AND provider = ? AND record_kind = ?"
+            (list hostname provider record-kind))))
+         (insert-file-count
+          (caar
+           (sqlite-select
+            db
+            "SELECT COUNT(*)
+FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item i ON i.message_id = f.message_id
+WHERE i.hostname = ? AND i.provider = ? AND i.record_kind = ?"
+            (list hostname provider record-kind))))
+         (authority-row
+          (car
+           (deterred-db-select-alist
+            db
+            "SELECT usage_row_count, file_row_count
+FROM other_db.meta_ai_authoritative_source
+WHERE hostname = ? AND provider = ? AND record_kind = ?"
+            (list hostname provider record-kind))))
+         (expected-item-count (alist-get 'usage_row_count authority-row))
+         (expected-file-count (alist-get 'file_row_count authority-row)))
+    (unless (and (integerp expected-item-count)
+                 (integerp expected-file-count))
+      (error "Missing AI authority counts for %s/%s/%s"
+             hostname provider record-kind))
+    (unless (and (= insert-item-count expected-item-count)
+                 (= insert-file-count expected-file-count))
+      (error
+       (concat "AI authority count mismatch for %s/%s/%s: "
+               "metadata says %d usage/%d files, database has %d usage/%d files")
+       hostname provider record-kind
+       expected-item-count expected-file-count
+       insert-item-count insert-file-count))
+    (deterred-sync--ai-log
+     log-buffer
+     "  Authoritative %s/%s/%s: delete %d files and %d usage rows; copy %d usage rows and %d files\n"
+     hostname provider record-kind delete-file-count delete-item-count
+     insert-item-count insert-file-count)
+    (unless dry-run
+      ;; Child rows must go first because ai_usage_file references
+      ;; ai_usage_item.
+      (sqlite-execute
+       db
+       (format "DELETE FROM main.ai_usage_file
+WHERE message_id IN (SELECT message_id FROM main.ai_usage_item WHERE %s)"
+               delete-item-where)
+       delete-values)
+      (sqlite-execute
+       db
+       (format "DELETE FROM main.ai_usage_item WHERE %s" delete-item-where)
+       delete-values)
+      (sqlite-execute
+       db
+       "INSERT OR REPLACE INTO main.ai_usage_item
+SELECT * FROM other_db.ai_usage_item
+WHERE hostname = ? AND provider = ? AND record_kind = ?"
+       (list hostname provider record-kind))
+      (sqlite-execute
+       db
+       "INSERT OR REPLACE INTO main.ai_usage_file
+SELECT f.* FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item i ON i.message_id = f.message_id
+WHERE i.hostname = ? AND i.provider = ? AND i.record_kind = ?"
+       (list hostname provider record-kind))
+      (sqlite-execute
+       db
+       "INSERT OR REPLACE INTO main.meta_ai_authoritative_source
+SELECT * FROM other_db.meta_ai_authoritative_source
+WHERE hostname = ? AND provider = ? AND record_kind = ?"
+       (list hostname provider record-kind)))))
+
+(defun deterred-sync--ai-append-non-authoritative
+    (db hostname dry-run log-buffer)
+  "Append non-authoritative AI rows for HOSTNAME from other_db to DB.
+
+Rows covered by an incoming authoritative slice are excluded.  In
+particular, a Codex turn slice also covers legacy token-event rows.
+DRY-RUN and LOG-BUFFER control reporting as in other sync strategies."
+  (let* ((not-covered
+          "NOT EXISTS (
+  SELECT 1 FROM other_db.meta_ai_authoritative_source a
+  WHERE a.hostname = o.hostname
+    AND a.provider = o.provider
+    AND (a.record_kind = o.record_kind
+      OR (a.provider = 'codex' AND a.record_kind = 'codex-turn-model'
+        AND o.record_kind = 'legacy-token-event')))")
+         (item-count
+          (caar
+           (sqlite-select
+            db
+            (format "SELECT COUNT(*) FROM other_db.ai_usage_item o
+WHERE o.hostname = ? AND %s" not-covered)
+            (list hostname))))
+         (file-count
+          (caar
+           (sqlite-select
+            db
+            (format "SELECT COUNT(*)
+FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item o ON o.message_id = f.message_id
+WHERE o.hostname = ? AND %s" not-covered)
+            (list hostname)))))
+    (deterred-sync--ai-log
+     log-buffer
+     "  Non-authoritative %s: append/merge %d usage rows and %d files without deletion\n"
+     hostname item-count file-count)
+    (unless dry-run
+      (sqlite-execute
+       db
+       (format "INSERT OR IGNORE INTO main.ai_usage_item
+SELECT o.* FROM other_db.ai_usage_item o
+WHERE o.hostname = ? AND %s" not-covered)
+       (list hostname))
+      (sqlite-execute
+       db
+       (format "INSERT OR IGNORE INTO main.ai_usage_file
+SELECT f.* FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item o ON o.message_id = f.message_id
+WHERE o.hostname = ? AND %s" not-covered)
+       (list hostname)))))
+
+(defun deterred-sync--ai-append-hostname
+    (db hostname dry-run log-buffer)
+  "Append every AI row for HOSTNAME from other_db into DB.
+
+Existing primary keys are preserved, so this path never deletes or
+overwrites historical data.  Files are restricted to usage rows for
+HOSTNAME.  DRY-RUN and LOG-BUFFER control reporting as in other sync
+strategies."
+  (let ((item-count
+         (caar
+          (sqlite-select
+           db
+           "SELECT COUNT(*) FROM other_db.ai_usage_item WHERE hostname = ?"
+           (list hostname))))
+        (file-count
+         (caar
+          (sqlite-select
+           db
+           "SELECT COUNT(*)
+FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item i ON i.message_id = f.message_id
+WHERE i.hostname = ?"
+           (list hostname)))))
+    (deterred-sync--ai-log
+     log-buffer
+     "  Non-authoritative %s: append/merge all %d usage rows and %d files without deletion\n"
+     hostname item-count file-count)
+    (unless dry-run
+      (sqlite-execute
+       db
+       "INSERT OR IGNORE INTO main.ai_usage_item
+SELECT * FROM other_db.ai_usage_item WHERE hostname = ?"
+       (list hostname))
+      (sqlite-execute
+       db
+       "INSERT OR IGNORE INTO main.ai_usage_file
+SELECT f.* FROM other_db.ai_usage_file f
+INNER JOIN other_db.ai_usage_item i ON i.message_id = f.message_id
+INNER JOIN main.ai_usage_item m
+  ON m.message_id = i.message_id AND m.hostname = i.hostname
+WHERE i.hostname = ?"
+       (list hostname)))))
+
+(cl-defun deterred-sync--ai-usage
+    (db &key table-names hostname dry-run log-buffer)
+  "Sync AI usage and file rows from other_db into DB.
+
+TABLE-NAMES declares the two tables covered by this strategy for the
+sync sanity checker.  If other_db has authoritative metadata for
+HOSTNAME, replace exactly those provider/record-kind slices and
+append uncovered data.  Otherwise use the old append-only strategies.
+No path deletes legacy or stats rows unless an authoritative Codex
+turn slice explicitly supersedes legacy token events.
+
+If DRY-RUN is non-nil, only log the operations to LOG-BUFFER."
+  (unless (and (memq 'ai_usage_item table-names)
+               (memq 'ai_usage_file table-names))
+    (error "AI sync strategy must cover ai_usage_item and ai_usage_file"))
+  (deterred-sync--ai-copy-pricing-revisions
+   db hostname dry-run log-buffer)
+  (if (not (deterred-sync--table-exists-p
+            db "other_db" 'meta_ai_authoritative_source))
+      (progn
+        (deterred-sync--ai-log
+         log-buffer
+         "  No AI authority metadata; using append-only legacy sync\n")
+        (deterred-sync--ai-append-hostname
+         db hostname dry-run log-buffer))
+    (let ((authoritative-rows
+           (deterred-db-select-alist
+            db
+            "SELECT provider, record_kind
+FROM other_db.meta_ai_authoritative_source
+WHERE hostname = ?
+ORDER BY provider, record_kind"
+            (list hostname))))
+      (if (null authoritative-rows)
+          (progn
+            (deterred-sync--ai-log
+             log-buffer
+             "  No authoritative slices for %s; using append-only legacy sync\n"
+             hostname)
+            (deterred-sync--ai-append-hostname
+             db hostname dry-run log-buffer))
+        (dolist (row authoritative-rows)
+          (deterred-sync--ai-replace-authoritative-slice
+           db hostname (alist-get 'provider row) (alist-get 'record_kind row)
+           dry-run log-buffer))
+        (deterred-sync--ai-append-non-authoritative
+         db hostname dry-run log-buffer)))
+    (unless dry-run
+      (deterred-db-mark-updated db 'ai_usage_item)
+      (deterred-db-mark-updated db 'ai_usage_file))))
 
 (cl-defun deterred-sync--replace (db &key table-names hostname dry-run log-buffer)
   "Replace tables in DB with data from other_db if any has more rows.
