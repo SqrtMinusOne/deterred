@@ -274,32 +274,44 @@ Signal a contextual error on any component decrease."
 (defun deterred-ai-codex--session-source (payload)
   "Return source metadata from the first session PAYLOAD.
 
-The return value is (SUBAGENT . PARENT-ID)."
+The return value is (SUBAGENT PARENT-ID REPLAYED).  REPLAYED means the
+rollout contains copied parent history and must wait for an activation
+boundary before emitting usage."
   (let* ((thread-source
           (deterred-ai-codex--value 'thread_source payload))
          (source (deterred-ai-codex--value 'source payload))
          (subagent-source
           (and (deterred-ai-codex--alist-object-p source)
                (deterred-ai-codex--value 'subagent source)))
-         (spawn (and (deterred-ai-codex--alist-object-p subagent-source)
-                     (or (deterred-ai-codex--value
-                          'thread_spawn subagent-source)
-                         subagent-source)))
+         (thread-spawn
+          (and (deterred-ai-codex--alist-object-p subagent-source)
+               (deterred-ai-codex--value
+                'thread_spawn subagent-source)))
+         (spawn
+          (and (deterred-ai-codex--alist-object-p subagent-source)
+               (or thread-spawn subagent-source)))
          (subagent (or (equal thread-source "subagent")
                        (deterred-ai-codex--alist-object-p subagent-source)))
+         (forked-from-id
+          (or (and (deterred-ai-codex--alist-object-p spawn)
+                   (deterred-ai-codex--non-empty-string
+                    (deterred-ai-codex--value
+                     'forked_from_id spawn)))
+              (deterred-ai-codex--non-empty-string
+               (deterred-ai-codex--value 'forked_from_id payload))))
          (parent
           (or (deterred-ai-codex--non-empty-string
                (deterred-ai-codex--value 'parent_thread_id payload))
               (and (deterred-ai-codex--alist-object-p spawn)
-                   (or (deterred-ai-codex--non-empty-string
-                        (deterred-ai-codex--value
-                         'parent_thread_id spawn))
-                       (deterred-ai-codex--non-empty-string
-                        (deterred-ai-codex--value
-                         'forked_from_id spawn))))
-              (deterred-ai-codex--non-empty-string
-               (deterred-ai-codex--value 'forked_from_id payload)))))
-    (cons subagent parent)))
+                   (deterred-ai-codex--non-empty-string
+                    (deterred-ai-codex--value
+                     'parent_thread_id spawn)))
+              forked-from-id))
+         (replayed
+          (and subagent
+               (or (deterred-ai-codex--alist-object-p thread-spawn)
+                   forked-from-id))))
+    (list subagent parent replayed)))
 
 (defun deterred-ai-codex--dimension-string (date model tier)
   "Build a stable dimension string from DATE, MODEL, and TIER."
@@ -339,6 +351,15 @@ uses that key; only later date/model/tier splits receive a suffix."
                     turn-key
                     (substring (secure-hash 'sha256 dimension) 0 16)))
           turn-dimensions)))
+
+(defun deterred-ai-codex--entry-less-p (left right)
+  "Return non-nil when usage entry LEFT should sort before RIGHT."
+  (let ((left-ts (alist-get 'timestamp left))
+        (right-ts (alist-get 'timestamp right)))
+    (if (= left-ts right-ts)
+        (string< (alist-get 'message-id left)
+                 (alist-get 'message-id right))
+      (< left-ts right-ts))))
 
 (defun deterred-ai-codex--content-line-count (content)
   "Count logical lines in patch CONTENT."
@@ -432,8 +453,10 @@ additive deltas keyed by stable message IDs.  The state contains only
 JSON-serializable alists, lists, strings, numbers, booleans, and nil.
 
 An incomplete final line is retained for the next call.  A fully parsed
-subagent without its first trigger marker is rejected unless
-ALLOW-INCOMPLETE-SOURCE is non-nil.
+replayed subagent without its first trigger marker is rejected unless
+ALLOW-INCOMPLETE-SOURCE is non-nil.  Direct auxiliary subagents such as
+Codex guardians have no copied history or trigger marker and are active
+from their first record.
 
 When `deterred-ai-codex-progress-callback' is non-nil, call it at the
 initial offset and after each input chunk, including chunks ending
@@ -496,8 +519,6 @@ inside a very large JSON record."
             (deterred-ai-codex--state-value 'previous-total prior-state))
            (current-turn-id
             (deterred-ai-codex--state-value 'current-turn-id prior-state))
-           (current-turn-start
-            (deterred-ai-codex--state-value 'current-turn-start prior-state))
            (current-turn-timestamp
             (deterred-ai-codex--state-value
              'current-turn-timestamp prior-state))
@@ -625,11 +646,7 @@ inside a very large JSON record."
                         (not (equal current-turn-id turn-id)))
                (flush-empty-current-turn))
              (setq current-turn-id turn-id
-                   current-turn-timestamp timestamp
-                   current-turn-start
-                   (and timestamp
-                        (deterred-ai-codex--timestamp-seconds
-                         timestamp path line-no record-byte-offset))))
+                   current-turn-timestamp timestamp))
            (add-usage (entry usage partial)
              (let* ((raw-input (alist-get 'input-tokens usage))
                     (cached (alist-get 'cached-input-tokens usage))
@@ -733,13 +750,16 @@ inside a very large JSON record."
                                         'id payload))))
                          (setq rollout-id id
                                source-key (concat "codex:" id)))
-                       (pcase-let ((`(,is-subagent . ,parent)
+                       (pcase-let ((`(,is-subagent ,parent ,replayed)
                                     (deterred-ai-codex--session-source
                                      payload)))
                          (setq subagent is-subagent
                                parent-session-id parent
-                               active (not is-subagent)
-                               activation-seen (not is-subagent)))
+                               ;; thread_spawn/forked rollouts begin with
+                               ;; copied parent history.  Direct auxiliary
+                               ;; subagents (for example guardians) do not.
+                               active (not replayed)
+                               activation-seen (not replayed)))
                        (when-let* ((cwd (deterred-ai-codex--non-empty-string
                                         (deterred-ai-codex--value
                                          'cwd payload))))
@@ -959,19 +979,10 @@ inside a very large JSON record."
                    (not allow-incomplete-source))
           (deterred-ai-codex--error
            path line-no parsed-offset
-           "subagent rollout has no trigger_turn activation boundary"))
-        (let (entries files)
-          (maphash (lambda (_ entry) (push entry entries)) groups)
-          (maphash (lambda (_ file) (push file files)) file-groups)
-          (setq entries
-                (sort entries
-                      (lambda (left right)
-                        (let ((left-ts (alist-get 'timestamp left))
-                              (right-ts (alist-get 'timestamp right)))
-                          (if (= left-ts right-ts)
-                              (string< (alist-get 'message-id left)
-                                       (alist-get 'message-id right))
-                            (< left-ts right-ts))))))
+           "replayed subagent rollout has no trigger_turn activation boundary"))
+        (let ((entries (hash-table-values groups))
+              (files (hash-table-values file-groups)))
+          (setq entries (sort entries #'deterred-ai-codex--entry-less-p))
           (setq files
                 (sort files
                       (lambda (left right)
@@ -1000,7 +1011,6 @@ inside a very large JSON record."
              (activation-seen . ,activation-seen)
              (previous-total . ,previous-total)
              (current-turn-id . ,current-turn-id)
-             (current-turn-start . ,current-turn-start)
              (current-turn-timestamp . ,current-turn-timestamp)
              (current-model . ,current-model)
              (current-cwd . ,current-cwd)
@@ -1074,15 +1084,7 @@ and a nil current path."
           (funcall deterred-ai-codex-corpus-progress-callback
                    completed-files total-files path completed-bytes
                    total-bytes))))
-    (setq entries
-          (sort entries
-                (lambda (left right)
-                  (let ((left-ts (alist-get 'timestamp left))
-                        (right-ts (alist-get 'timestamp right)))
-                    (if (= left-ts right-ts)
-                        (string< (alist-get 'message-id left)
-                                 (alist-get 'message-id right))
-                      (< left-ts right-ts))))))
+    (setq entries (sort entries #'deterred-ai-codex--entry-less-p))
     (list :entries entries
           :files files
           :sources (nreverse sources))))
