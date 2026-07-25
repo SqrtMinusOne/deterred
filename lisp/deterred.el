@@ -43,6 +43,7 @@
 (require 'deterred-dashboard)
 (require 'deterred-dispatcher)
 (require 'deterred-source)
+(require 'deterred-export)
 
 ;; Sources
 (require 'deterred-activitywatch)
@@ -76,10 +77,12 @@
 (require 'deterred-dashboard-hledger)
 (require 'deterred-dashboard-messengers)
 (require 'deterred-dashboard-mpd)
+(require 'deterred-dashboard-org-clock)
 (require 'deterred-dashboard-org-journal-tags)
 (require 'deterred-dashboard-org-roam)
 (require 'deterred-dashboard-podcasts)
 (require 'deterred-dashboard-read-it-later)
+(require 'deterred-dashboard-social-media)
 (require 'deterred-dashboard-transport)
 (require 'deterred-dashboard-wakatime)
 
@@ -93,10 +96,12 @@
        (deterred-dashboard-hledger)
        (deterred-dashboard-messengers)
        (deterred-dashboard-mpd)
+       (deterred-dashboard-org-clock)
        (deterred-dashboard-org-journal-tags)
        (deterred-dashboard-org-roam)
        (deterred-dashboard-podcasts)
        (deterred-dashboard-read-it-later)
+       (deterred-dashboard-social-media)
        (deterred-dashboard-transport)
        (deterred-dashboard-wakatime)))
 

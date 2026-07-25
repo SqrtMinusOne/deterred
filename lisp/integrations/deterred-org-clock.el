@@ -509,5 +509,11 @@ DB is the sqlite database object."
           ORDER BY oci.start_timestamp"
       (list start end)))))
 
+(declare-function deterred-dashboard-org-clock "deterred-dashboard-org-clock")
+
+(cl-defmethod deterred-source-default-dashboard ((_source deterred-org-clock))
+  "Return the default dashboard for Org Clock."
+  (deterred-dashboard-org-clock))
+
 (provide 'deterred-org-clock)
 ;;; deterred-org-clock.el ends here
