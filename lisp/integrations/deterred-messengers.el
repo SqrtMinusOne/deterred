@@ -57,6 +57,14 @@
   :type 'string
   :group 'deterred)
 
+(defcustom deterred-messengers-discord-non-work nil
+  "Discord chat names to include in the Social Media dashboard.
+
+Names are matched exactly against `messenger_chat.name'.  An empty
+list excludes all Discord messages from that dashboard."
+  :type '(repeat (string :tag "Chat name"))
+  :group 'deterred)
+
 (defcustom deterred-messengers-vk-timezone-offset -10800
   "Timezone offset in seconds to convert VK timestamps to UTC.
 
