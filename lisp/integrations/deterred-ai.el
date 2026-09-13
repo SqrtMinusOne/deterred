@@ -100,8 +100,12 @@ historical usage between days."
 (defconst deterred-ai--parser-version deterred-ai-codex-parser-version
   "Version of the AI transcript parser and its persisted state.")
 
-(defconst deterred-ai--gpt-5.6-long-context-threshold 272000
-  "Input-token threshold above which GPT-5.6 uses long-context prices.")
+(defconst deterred-ai--service-tier-suffixes
+  '(("default" . "") ("standard" . "")
+    ("priority" . "_priority") ("fast" . "_priority")
+    ("flex" . "_flex") ("batch" . "_batches"))
+  "LiteLLM price-field suffixes for supported service tiers.
+Fast is the API alias for Priority processing.")
 
 (defvar deterred-ai--pricing-data nil)
 
@@ -177,20 +181,13 @@ network request."
      (when callback (funcall callback)))
    t))
 
-(defun deterred-ai--gpt-5.6-sol-pricing ()
-  "Return the audited GPT-5.6 Sol pricing record."
-  '((input_cost_per_token . 0.000005)
-    (cache_read_input_token_cost . 0.0000005)
-    (output_cost_per_token . 0.00003)
-    (cache_creation_input_token_cost . 0.00000625)
-    (deterred_tiered_input_cost_per_token . 0.00001)
-    (deterred_tiered_cache_read_input_token_cost . 0.000001)
-    (deterred_tiered_output_cost_per_token . 0.000045)
-    (deterred_tiered_cache_creation_input_token_cost . 0.0000125)
-    (deterred_tiered_threshold . 272000)
-    (deterred_tiered_whole_request . t)
-    ;; API Priority processing for GPT-5.6 is billed at twice Standard.
-    (deterred_priority_multiplier . 2.0)))
+(defun deterred-ai--pricing-rules ()
+  "Return the rules that identify the effective pricing calculation."
+  `((calculator_version . 2)
+    (parser_version . ,deterred-ai--parser-version)
+    (codex_long_context_thresholds
+     . ,deterred-ai-codex--long-context-thresholds)
+    (service_tier_suffixes . ,deterred-ai--service-tier-suffixes)))
 
 (defun deterred-ai--record-pricing-revision ()
   "Record and cache the current pricing revision in the database."
@@ -211,12 +208,7 @@ network request."
               (pricing_revision_id, provider, source_hash, rules_json, created_at)
               VALUES (?, 'global', ?, ?, unixepoch())"
              (list revision-id deterred-ai--pricing-source-hash
-                   (json-encode
-                    `((parser_version . ,deterred-ai--parser-version)
-                      (gpt_5_6_long_context_threshold
-                       . ,deterred-ai--gpt-5.6-long-context-threshold)
-                      (gpt_5_6_sol
-                       . ,(deterred-ai--gpt-5.6-sol-pricing)))))))
+                   (json-encode (deterred-ai--pricing-rules)))))
           (setq deterred-ai--pricing-revision-id revision-id))
       (error
        ;; Loading pricing is also useful before the database is initialized.
@@ -226,21 +218,18 @@ network request."
   "Store LLM pricing data.
 
 DATA is a response from LiteLLM."
-  ;; The local GPT-5.6 rule is part of the effective price book, so include it
-  ;; in the revision hash instead of hashing only the upstream snapshot.
+  ;; Identify both the upstream snapshot and the rules used to interpret it.
   (setq deterred-ai--pricing-source-hash
         (secure-hash
          'sha256
          (encode-coding-string
           (concat (json-encode data) "\0"
-                  (json-encode (deterred-ai--gpt-5.6-sol-pricing)))
+                  (json-encode (deterred-ai--pricing-rules)))
           'utf-8)))
   (setq deterred-ai--pricing-data (make-hash-table :test #'equal))
   (cl-loop for (k . v) in data
            do (puthash (symbol-name k) v deterred-ai--pricing-data))
-  (puthash "gpt-5.6-sol"
-           (deterred-ai--gpt-5.6-sol-pricing)
-           deterred-ai--pricing-data)
+  (setq deterred-ai--pricing-revision-id nil)
   (deterred-ai--record-pricing-revision))
 
 (defun deterred-ai--get-pricing-datum (model)
@@ -681,16 +670,18 @@ threshold, while older price records describe a marginal tier."
     (+ (* base (or base-price 0))
        (* tiered (or tiered-price base-price 0)))))
 
-(defun deterred-ai--service-tier-multiplier (model tier pricing)
-  "Return the API price multiplier for MODEL, TIER, and PRICING.
-
-Return nil when the tier cannot be priced without guessing."
-  (cond
-   ((member (or tier "default") '("default" "standard")) 1.0)
-   ((and (equal model "gpt-5.6-sol")
-         (equal tier "priority"))
-    (deterred-ai--json-value 'deterred_priority_multiplier pricing))
-   (t nil)))
+(defun deterred-ai--token-price (pricing field suffix &optional threshold)
+  "Read a nonnegative token price from PRICING.
+FIELD is the base LiteLLM key, SUFFIX selects the service tier, and
+THRESHOLD selects a long-context key such as 272000."
+  (let ((value
+         (deterred-ai--json-value
+          (intern (concat (symbol-name field)
+                          (when threshold
+                            (format "_above_%dk_tokens" (/ threshold 1000)))
+                          suffix))
+          pricing)))
+    (and (numberp value) (>= value 0) value)))
 
 (defun deterred-ai--populate-legacy-tiered-basis (entry)
   "Populate marginal tier fields in legacy ENTRY.
@@ -714,64 +705,46 @@ LiteLLM marginal-tier behavior without reparsing them during repricing."
   "Compute USD cost for a parsed ENTRY.
 
 Uses LiteLLM pricing data.  `deterred-ai--ensure-pricing' must be
-called before this.  Returns cost as a float in dollars."
+called before this.  Return dollars as a float, or nil if a rate
+required by the recorded tokens and service tier is unavailable."
   (let* ((model-name (alist-get 'model-name entry))
          (mapped-name (or (cdr (assoc model-name deterred-ai-model-name-map))
                           model-name))
          (pricing (condition-case nil
                       (deterred-ai--get-pricing-datum mapped-name)
                     (error nil)))
-         (tier-multiplier
-          (and pricing
-               (deterred-ai--service-tier-multiplier
-                mapped-name (alist-get 'service-tier entry) pricing))))
-    (if (or (null pricing) (null tier-multiplier))
+         (suffix (cdr (assoc (or (alist-get 'service-tier entry) "default")
+                             deterred-ai--service-tier-suffixes)))
+         (threshold (cdr (assoc mapped-name
+                                deterred-ai-codex--long-context-thresholds))))
+    (if (or (null pricing) (null suffix))
         nil
-      (deterred-ai--populate-legacy-tiered-basis entry)
-      (let ((input-price (or (deterred-ai--json-value 'input_cost_per_token pricing) 0))
-            (input-tiered
-             (or (deterred-ai--json-value
-                  'deterred_tiered_input_cost_per_token pricing)
-                 (deterred-ai--json-value
-                  'input_cost_per_token_above_200k_tokens pricing)))
-            (output-price (or (deterred-ai--json-value 'output_cost_per_token pricing) 0))
-            (output-tiered
-             (or (deterred-ai--json-value
-                  'deterred_tiered_output_cost_per_token pricing)
-                 (deterred-ai--json-value
-                  'output_cost_per_token_above_200k_tokens pricing)))
-            (cache-create-price (or (deterred-ai--json-value
-                                     'cache_creation_input_token_cost pricing) 0))
-            (cache-create-tiered
-             (or (deterred-ai--json-value
-                  'deterred_tiered_cache_creation_input_token_cost pricing)
-                 (deterred-ai--json-value
-                  'cache_creation_input_token_cost_above_200k_tokens pricing)))
-            (cache-read-price (or (deterred-ai--json-value
-                                   'cache_read_input_token_cost pricing) 0))
-            (cache-read-tiered
-             (or (deterred-ai--json-value
-                  'deterred_tiered_cache_read_input_token_cost pricing)
-                 (deterred-ai--json-value
-                  'cache_read_input_token_cost_above_200k_tokens pricing))))
-        (float
-         (* tier-multiplier
-            (+ (deterred-ai--component-cost
-                (alist-get 'input-tokens entry)
-                (alist-get 'tiered-input-tokens entry)
-                input-price input-tiered)
-               (deterred-ai--component-cost
-                (alist-get 'output-tokens entry)
-                (alist-get 'tiered-output-tokens entry)
-                output-price output-tiered)
-               (deterred-ai--component-cost
-                (alist-get 'cache-creation-input-tokens entry)
-                (alist-get 'tiered-cache-creation-input-tokens entry)
-                cache-create-price cache-create-tiered)
-               (deterred-ai--component-cost
-                (alist-get 'cache-read-input-tokens entry)
-                (alist-get 'tiered-cache-read-input-tokens entry)
-                cache-read-price cache-read-tiered))))))))
+      (setq entry (deterred-ai--populate-legacy-tiered-basis entry))
+      (catch 'unknown-price
+        (let ((cost 0.0))
+          (dolist (component
+                   '((input-tokens tiered-input-tokens input_cost_per_token)
+                     (output-tokens tiered-output-tokens output_cost_per_token)
+                     (cache-creation-input-tokens tiered-cache-creation-input-tokens
+                      cache_creation_input_token_cost)
+                     (cache-read-input-tokens tiered-cache-read-input-tokens
+                      cache_read_input_token_cost)))
+            (pcase-let* ((`(,tokens-key ,tiered-key ,field) component)
+                         (tokens (or (alist-get tokens-key entry) 0))
+                         (tiered (min tokens (max 0 (or (alist-get tiered-key entry) 0))))
+                         (base-price (deterred-ai--token-price pricing field suffix))
+                         (tiered-price
+                          (or (deterred-ai--token-price
+                               pricing field suffix (or threshold 200000))
+                              ;; Legacy Claude models without marginal tiers
+                              ;; keep their ordinary component rates.
+                              (and (null threshold) base-price))))
+              (when (or (and (> (- tokens tiered) 0) (null base-price))
+                        (and (> tiered 0) (null tiered-price)))
+                (throw 'unknown-price nil))
+              (cl-incf cost (deterred-ai--component-cost
+                             tokens tiered base-price tiered-price))))
+          cost)))))
 
 (defun deterred-ai--match-project-id (path id-by-path)
   "Find wakatime project ID for PATH using ID-BY-PATH hash table.
@@ -1902,6 +1875,11 @@ indexes."
 (defun deterred-ai-recalculate-pricing (&optional callback)
   "Recalculate observed AI usage pricing without reparsing transcripts.
 
+After a Codex parser pricing-basis change, run
+`deterred-ai-rebuild-codex' first to recover per-request context tiers.
+Refresh the pricing snapshot with `deterred-ai-refresh-pricing' when
+new rates are needed; this command reuses the loaded snapshot.
+
 Call CALLBACK when non-nil."
   (interactive)
   (deterred-ai--ensure-pricing
@@ -2138,6 +2116,15 @@ DB is the sqlite database object."
                     FROM ai_usage_item WHERE is_stats = 0")))
     (cons (caar data) (cadar data))))
 
+(defun deterred-ai--format-summary-cost (row)
+  "Format ROW's known micro-USD cost and flag any unpriced usage."
+  (let ((cost (/ (float (or (alist-get 'total_cost row) 0)) 1000000.0))
+        (unknown (or (alist-get 'unknown_pricing_rows row) 0)))
+    (cond
+     ((zerop unknown) (format "$%.2f" cost))
+     ((> cost 0) (format "$%.2f known + unknown cost" cost))
+     (t "unknown cost"))))
+
 (cl-defmethod deterred-source-range-summary
   ((_source deterred-ai-usage) start end &optional db)
   "Make AI Usage summary for [START, END].
@@ -2155,14 +2142,19 @@ DB is the sqlite database object."
                                ELSE 0 END), 0) turn_count,
                            COALESCE(SUM(request_count), 0) request_count,
                            COALESCE(SUM(total_tokens), 0) total_tokens,
-                           COALESCE(SUM(usd_cost), 0) total_cost
+                           COALESCE(SUM(CASE
+                             WHEN pricing_status IN ('priced', 'historical')
+                             THEN usd_cost ELSE 0 END), 0) total_cost,
+                           COALESCE(SUM(CASE
+                             WHEN total_tokens > 0
+                               AND COALESCE(pricing_status, 'unknown') = 'unknown'
+                             THEN 1 ELSE 0 END), 0) unknown_pricing_rows
                     FROM ai_usage_item
                     WHERE timestamp BETWEEN ? AND ?
                       AND is_stats = 0"
                 (list start end))))
          (turn-count (alist-get 'turn_count totals))
          (request-count (alist-get 'request_count totals))
-         (total-cost (alist-get 'total_cost totals))
          (model-data
           (deterred-db-select-alist
            db "SELECT model_name,
@@ -2174,7 +2166,13 @@ DB is the sqlite database object."
                           ELSE 0 END), 0) turn_count,
                       COALESCE(SUM(request_count), 0) request_count,
                       SUM(total_tokens) total_tokens,
-                      SUM(usd_cost) total_cost
+                      COALESCE(SUM(CASE
+                        WHEN pricing_status IN ('priced', 'historical')
+                        THEN usd_cost ELSE 0 END), 0) total_cost,
+                      SUM(CASE
+                        WHEN total_tokens > 0
+                          AND COALESCE(pricing_status, 'unknown') = 'unknown'
+                        THEN 1 ELSE 0 END) unknown_pricing_rows
                FROM ai_usage_item
                WHERE timestamp BETWEEN ? AND ?
                  AND is_stats = 0
@@ -2183,8 +2181,8 @@ DB is the sqlite database object."
            (list start end))))
     (when (> turn-count 0)
       `((:short-description
-         . ,(format "$%.2f, %s turns, %s requests, %s tokens"
-                    (/ total-cost 1000000.0)
+         . ,(format "%s, %s turns, %s requests, %s tokens"
+                    (deterred-ai--format-summary-cost totals)
                     turn-count
                     request-count
                     (deterred-ai--format-tokens
@@ -2194,9 +2192,7 @@ DB is the sqlite database object."
              "Per model:\n"
              (f-mapconcat
               (f "- " (f-acc "iter->'model_name")
-                 ": $" (format "%.2f"
-                               (/ (float (alist-get 'total_cost iter))
-                                  1000000.0))
+                 ": " (deterred-ai--format-summary-cost iter)
                  ", " (f-num (alist-get 'turn_count iter)) " turns"
                  ", " (f-num (alist-get 'request_count iter)) " requests"
                  ", " (deterred-ai--format-tokens

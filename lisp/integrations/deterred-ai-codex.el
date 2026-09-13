@@ -28,7 +28,7 @@
 (require 'seq)
 (require 'subr-x)
 
-(defconst deterred-ai-codex-parser-version "2"
+(defconst deterred-ai-codex-parser-version "3"
   "Version of the persisted Codex parser state and output semantics.")
 
 (defconst deterred-ai-codex-api-version 1
@@ -49,8 +49,14 @@ cumulative bytes read, and total corpus bytes.")
 (defconst deterred-ai-codex--read-chunk-size (* 1024 1024)
   "Number of bytes read from a rollout at a time.")
 
-(defconst deterred-ai-codex--long-context-threshold 272000
-  "Raw input-token threshold for GPT-5.6 Sol long-context pricing.")
+(defconst deterred-ai-codex--long-context-thresholds
+  '(("gpt-5.6-sol" . 272000)
+    ("gpt-5.6-terra" . 272000)
+    ("gpt-5.6-luna" . 272000)
+    ("gpt-6-astra" . 272000))
+  "Raw input-token thresholds for audited whole-request pricing rules.
+Input includes cached tokens.  Requests strictly above a model's threshold
+use long-context prices for all input and output tokens.")
 
 (define-error 'deterred-ai-codex-parse-error
   "Invalid Codex rollout JSONL")
@@ -616,6 +622,8 @@ inside a very large JSON record."
                         (cons 'version session-version)
                         (cons 'input-tokens 0)
                         (cons 'output-tokens 0)
+                        ;; Codex reports cached reads, but no separate cache
+                        ;; write counter; uncached input is not a write count.
                         (cons 'cache-creation-input-tokens 0)
                         (cons 'cache-read-input-tokens 0)
                         (cons 'reasoning-output-tokens 0)
@@ -669,10 +677,11 @@ inside a very large JSON record."
                     (reasoning
                      (alist-get 'reasoning-output-tokens usage))
                     (total (alist-get 'total-tokens usage))
+                    (threshold
+                     (cdr (assoc current-model
+                                 deterred-ai-codex--long-context-thresholds)))
                     (tiered
-                     (and (equal current-model "gpt-5.6-sol")
-                          (> raw-input
-                             deterred-ai-codex--long-context-threshold))))
+                     (and threshold (> raw-input threshold))))
                (cl-incf (alist-get 'input-tokens entry) uncached)
                (cl-incf (alist-get 'cache-read-input-tokens entry) cached)
                (cl-incf (alist-get 'output-tokens entry) output)
