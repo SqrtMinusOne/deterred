@@ -44,9 +44,15 @@
   "ebae5b10-bfc1-470e-9e10-5c6a04860fe3")
 
 (defconst deterred-fit--parser-script
-  (expand-file-name
-   (concat (unless load-file-name "../") "../python/deterred-fit-parse.py")
-   (file-name-directory (or load-file-name buffer-file-name default-directory)))
+  (let* ((directory (file-name-directory
+                     (or load-file-name buffer-file-name default-directory)))
+         (installed-script
+          (expand-file-name "python/deterred-fit-parse.py" directory)))
+    ;; Straight puts python/ beside the Lisp files.  In the source tree,
+    ;; this file lives two directories below the repository root.
+    (if (file-exists-p installed-script)
+        installed-script
+      (expand-file-name "../../python/deterred-fit-parse.py" directory)))
   "Path to the helper script that parses FIT files.")
 
 (defun deterred-fit--read-directory ()
