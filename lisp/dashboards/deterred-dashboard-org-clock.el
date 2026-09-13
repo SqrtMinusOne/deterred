@@ -47,6 +47,13 @@ bounds AS (
   FROM org_clock_item
   WHERE end_timestamp > start_timestamp
 ),
+hours(hour) AS (
+  SELECT 0
+  UNION ALL
+  SELECT hour + 1
+  FROM hours
+  WHERE hour < 23
+),
 filtered_clocks AS (
   SELECT
     oci.headline_id,
@@ -211,6 +218,7 @@ daily AS (
   '((hours-per-month (name . "Clocked hours per month"))
     (hours-by-day-of-week
      (name . "Average clocked hours by day of week"))
+    (days-worked-by-hour (name . "Days worked by hour"))
     (hours-by-category (name . "Clocked hours by category"))
     (free-weekends-per-month (name . "Free wekends per month"))
     (free-weekends-per-quarter (name . "Free wekends per quarter"))
@@ -250,6 +258,29 @@ ORDER BY month ASC"))
 FROM daily
 GROUP BY day_of_week_number, day_of_week
 ORDER BY day_of_week_number ASC"))
+    (days-worked-by-hour
+     . ,(deterred-dashboard-org-clock--select
+         db params
+         "SELECT
+  hours.hour,
+  COUNT(DISTINCT clock_days.day) worked_days,
+  (SELECT COUNT(*)
+   FROM daily
+   WHERE clocked_seconds > 0) tracked_days
+FROM hours
+LEFT JOIN clock_days
+  ON clock_days.start_timestamp < unixepoch(
+    clock_days.day,
+    printf('+%d hours', hours.hour + 1),
+    'utc'
+  )
+ AND clock_days.end_timestamp > unixepoch(
+    clock_days.day,
+    printf('+%d hours', hours.hour),
+    'utc'
+  )
+GROUP BY hours.hour
+ORDER BY hours.hour ASC"))
     (hours-by-category
      . ,(deterred-dashboard-org-clock--select
          db params
@@ -404,6 +435,33 @@ def add_bar(dataset, x_column, y_column, title, xlabel, ylabel,
     plt.tight_layout()
     images.append(fig_to_b64(fig))
 
+def add_days_worked_by_hour():
+    df = pd.DataFrame(data['days-worked-by-hour']['data'])
+    tracked_days = int(df['tracked_days'].max()) if not df.empty else 0
+    if tracked_days == 0:
+        images.append(None)
+        return
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    bars = ax.bar(df['hour'], df['worked_days'])
+    ax.set_title(f'Days worked by hour ({tracked_days} tracked days)')
+    ax.set_xlabel('Hour')
+    ax.set_ylabel('Days with tracked work')
+    ax.set_xlim(-0.5, 23.5)
+    ax.set_ylim(0, tracked_days)
+    ax.set_xticks(range(24))
+    tick_steps = min(tracked_days, 6)
+    ax.set_yticks(sorted({
+        round(step * tracked_days / tick_steps)
+        for step in range(tick_steps + 1)
+    }))
+    ax.bar_label(
+        bars,
+        labels=[str(value) if value else '' for value in df['worked_days']],
+        padding=2)
+    plt.tight_layout()
+    images.append(fig_to_b64(fig))
+
 add_bar(
     'hours-per-month',
     'month',
@@ -420,6 +478,7 @@ add_bar(
     'Day of week',
     'Average hours',
     value_format='%.1f')
+add_days_worked_by_hour()
 add_bar(
     'hours-by-category',
     'category',
@@ -465,16 +524,20 @@ print(json.dumps(images))"
        (deterred-dashboard-print-images-base64 (elt images 1))
        (insert "\n"))
      (when (elt images 2)
-       (insert (deterred-format (f-h3 "Clocked hours by category") "\n"))
+       (insert (deterred-format (f-h3 "Days worked by hour") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 2))
        (insert "\n"))
      (when (elt images 3)
-       (insert (deterred-format (f-h3 "Free wekends per month") "\n"))
+       (insert (deterred-format (f-h3 "Clocked hours by category") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 3))
        (insert "\n"))
      (when (elt images 4)
-       (insert (deterred-format (f-h3 "Free wekends per quarter") "\n"))
+       (insert (deterred-format (f-h3 "Free wekends per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 4))
+       (insert "\n"))
+     (when (elt images 5)
+       (insert (deterred-format (f-h3 "Free wekends per quarter") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 5))
        (insert "\n"))))
   (insert
    (deterred-format (f-h2 "Top headlines") "\n")

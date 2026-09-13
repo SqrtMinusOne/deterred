@@ -101,6 +101,7 @@
     (last-discovered-albums (name . "Last discovered albums"))
     (new-albums-listened (name . "Hours listened to new albums by year"))
     (current-year-releases-listened (name . "Hours listened to current year releases vs. older"))
+    (listened-by-release-decade-per-year (name . "Listening share by release decade per year"))
     (average-album-age-per-month (name . "Average album age per month"))
     (top-days (name . "Top days by listened time"))
     (top-weeks (name . "Top weeks by listened time"))
@@ -109,6 +110,41 @@
     (artist-comparison-by-year (name . "Artist comparison by year"))
     (recent-listened-per-hostname-per-day (name . "Recent hours listened per hostname per day"))
     (recent-listened-per-hour (name . "Recent listening intervals by time of day"))))
+
+(defun deterred-dashboard-mpd--listened-by-release-decade-per-year (db params)
+  "Return annual listening hours and percentages by release decade from DB.
+
+Apply the dashboard filters in PARAMS before computing each year's total.
+Listening time is the song duration for each recorded play.  Missing or
+invalid release years form an explicit Unknown group; imported release
+years are four-digit integers.  Plays without a positive duration are
+excluded, so years without listening time produce no rows."
+  (deterred-db-select-template-alist
+   db
+   "WITH listening AS (
+  SELECT
+    strftime('%Y', msl.timestamp, 'unixepoch') year,
+    CASE
+      WHEN ms.year BETWEEN 1000 AND 9999
+        THEN CAST(ms.year / 10 * 10 AS TEXT) || 's'
+      ELSE 'Unknown'
+    END decade,
+    ms.duration
+  FROM mpd_song_listened msl
+  INNER JOIN mpd_song ms ON ms.id = msl.mpd_song_id
+  WHERE ms.duration > 0 AND strftime('%Y', msl.timestamp, 'unixepoch') IS NOT NULL
+    [[AND msl.timestamp >= :start-date]] [[AND msl.timestamp <= :end-date]]
+    [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
+), decade_totals AS (
+  SELECT year, decade, sum(duration) seconds
+  FROM listening
+  GROUP BY year, decade
+)
+SELECT year, decade, seconds / 3600.0 hours,
+  seconds * 100.0 / sum(seconds) OVER (PARTITION BY year) percentage
+FROM decade_totals
+ORDER BY year, decade"
+   params))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-mpd)
                                                  params)
@@ -330,6 +366,9 @@ WHERE 1 = 1 [[AND timestamp >= :start-date]] [[AND timestamp <= :end-date]]
   [[AND ms.album_artist IN :artist]] [[AND ms.album IN :album]]
 GROUP BY STRFTIME('%Y', msl.timestamp, 'unixepoch')"
            params))
+      (listened-by-release-decade-per-year
+       . ,(deterred-dashboard-mpd--listened-by-release-decade-per-year
+           db params))
       (top-months
        . ,(deterred-db-select-template-alist
            db

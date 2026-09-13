@@ -80,6 +80,9 @@
 (cl-defmethod deterred-dashboard-list-datasets ((_dashboard deterred-dashboard-read-it-later))
   "List datasets for the read-it-later dashboard."
   '((articles-per-year (name . "Articles read per year"))
+    (unique-hosts-per-year (name . "Unique reading sites per year"))
+    (top-five-hosts-share-per-year
+     (name . "Share of articles from the top five sites per year"))
     (articles-per-month (name . "Articles read per month"))
     (articles-in-language-per-month (name . "Articles in language per month"))
     (top-hosts (name . "Top hosts"))
@@ -89,6 +92,47 @@
     (top-weeks (name . "Top weeks"))
     (top-months (name . "Top months"))
     (numbers-data (name . "Numerical data"))))
+
+(defun deterred-dashboard-read-it-later--host-statistics-per-year (db params)
+  "Fetch annual reading-site counts and concentration from DB using PARAMS.
+
+Rank the full set of stored hosts separately for each year.  Missing
+or blank hosts count toward the article total, but not the site count
+or top five.  Return only annual aggregate values, without host names."
+  (deterred-db-select-template-alist
+   db
+   "WITH filtered_articles AS (
+  SELECT strftime('%Y', rila.read_at, 'unixepoch') year, rila.host
+  FROM read_it_later_article rila
+  WHERE 1 = 1 [[AND rila.read_at >= :start-date]] [[AND rila.read_at <= :end-date]]
+    [[AND rila.host IN :hosts]]
+    [[AND rila.provider IN :providers]]
+), annual_articles AS (
+  SELECT year, COUNT(*) articles
+  FROM filtered_articles
+  GROUP BY year
+), host_articles AS (
+  SELECT year, host, COUNT(*) articles
+  FROM filtered_articles
+  WHERE host IS NOT NULL AND length(trim(host, char(9, 10, 11, 12, 13, 32))) > 0
+  GROUP BY year, host
+), ranked_hosts AS (
+  SELECT year, articles,
+    ROW_NUMBER() OVER (PARTITION BY year ORDER BY articles DESC, host) position
+  FROM host_articles
+), annual_hosts AS (
+  SELECT year, COUNT(*) hosts,
+    SUM(CASE WHEN position <= 5 THEN articles ELSE 0 END) top_five_articles
+  FROM ranked_hosts
+  GROUP BY year
+)
+SELECT aa.year, COALESCE(ah.hosts, 0) hosts, aa.articles,
+  COALESCE(ah.top_five_articles, 0) top_five_articles,
+  COALESCE(ah.top_five_articles, 0) * 100.0 / aa.articles percentage
+FROM annual_articles aa
+LEFT JOIN annual_hosts ah ON ah.year = aa.year
+ORDER BY aa.year"
+   params))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-read-it-later)
                                                  params)
@@ -130,7 +174,9 @@ PARAMS is as returned by `deterred-dashboard-default-params'."
   [[AND rila.provider IN :providers]]
 ) AS unique_providers;"
            params))
-         (total-articles (alist-get 'total_articles (car numbers-data))))
+         (total-articles (alist-get 'total_articles (car numbers-data)))
+         (host-statistics
+          (deterred-dashboard-read-it-later--host-statistics-per-year db params)))
     `((articles-per-year
        . ,(deterred-db-select-template-alist
            db
@@ -143,6 +189,20 @@ WHERE 1 = 1 [[AND rila.read_at >= :start-date]] [[AND rila.read_at <= :end-date]
   [[AND rila.provider IN :providers]]
 GROUP BY strftime('%Y', rila.read_at, 'unixepoch')"
            params))
+      (unique-hosts-per-year
+       . ,(mapcar
+           (lambda (row)
+             `((year . ,(alist-get 'year row))
+               (hosts . ,(alist-get 'hosts row))))
+           host-statistics))
+      (top-five-hosts-share-per-year
+       . ,(mapcar
+           (lambda (row)
+             `((year . ,(alist-get 'year row))
+               (articles . ,(alist-get 'articles row))
+               (top_five_articles . ,(alist-get 'top_five_articles row))
+               (percentage . ,(alist-get 'percentage row))))
+           host-statistics))
       (articles-per-month
        . ,(deterred-db-select-template-alist
            db
