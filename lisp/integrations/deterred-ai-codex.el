@@ -220,6 +220,20 @@ authoritative."
                   (or (alist-get key right) 0))))
    deterred-ai-codex--usage-keys))
 
+(defun deterred-ai-codex--usage-reset-p (current previous last)
+  "Return non-nil when CURRENT restarts the PREVIOUS cumulative counters.
+
+Codex can reset these counters when resuming a rollout.  Require LAST
+to equal the entire new total so the reset accounts for exactly one
+request.  Unexplained decreases still fail normal delta validation."
+  (and previous last
+       (deterred-ai-codex--usage-equal-p current last)
+       (seq-some
+        (lambda (key)
+          (< (or (alist-get key current) 0)
+             (or (alist-get key previous) 0)))
+        deterred-ai-codex--usage-keys)))
+
 (defun deterred-ai-codex--usage-delta
     (current previous path line-no byte-offset)
   "Subtract PREVIOUS cumulative usage from CURRENT.
@@ -872,6 +886,9 @@ inside a very large JSON record."
                                delta partial)
                           (cond
                            (total
+                            (when (deterred-ai-codex--usage-reset-p
+                                   total previous-total last)
+                              (setq previous-total nil))
                             (setq delta
                                   (deterred-ai-codex--usage-delta
                                    total previous-total path line-no

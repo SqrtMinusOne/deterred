@@ -77,6 +77,14 @@
   :group 'deterred
   :type '(alist :key-type string :value-type string))
 
+(defcustom deterred-ai-model-prefixes-to-remove '("anthropic/")
+  "Prefixes to remove from model names stored in the DETERRED database.
+
+Use `deterred-ai-remove-model-prefixes' to apply this setting to
+existing rows."
+  :group 'deterred
+  :type '(repeat string))
+
 (defcustom deterred-ai-time-zone nil
   "Time zone used to assign AI usage to a calendar date.
 
@@ -1758,6 +1766,36 @@ the rebuild refuses to lose IDs whose raw rollout is unavailable.  Call
 CALLBACK when non-nil."
   (interactive)
   (deterred-ai--load-codex-incremental callback t))
+
+(defun deterred-ai-remove-model-prefixes (&optional callback)
+  "Remove configured prefixes from stored AI model names.
+
+The prefixes in `deterred-ai-model-prefixes-to-remove' are applied in
+order to `ai_usage_item.model_name'.  Return the number of updated rows.
+Call CALLBACK when non-nil."
+  (interactive)
+  (let ((db (deterred-db--init))
+        (prefixes (delete-dups
+                   (copy-sequence deterred-ai-model-prefixes-to-remove)))
+        (updated 0))
+    (dolist (prefix prefixes)
+      (unless (and (stringp prefix) (not (string-empty-p prefix)))
+        (user-error "AI model prefixes must be non-empty strings: %S" prefix)))
+    (with-sqlite-transaction db
+      (dolist (prefix prefixes)
+        (sqlite-execute
+         db
+         "UPDATE ai_usage_item
+          SET model_name = substr(model_name, ?)
+          WHERE substr(model_name, 1, ?) = ?"
+         (list (1+ (length prefix)) (length prefix) prefix))
+        (cl-incf updated (caar (sqlite-select db "SELECT changes()"))))
+      (when (> updated 0)
+        (deterred-db-mark-updated db 'ai_usage_item)))
+    (message "deterred-ai: removed model prefixes from %d items" updated)
+    (when callback
+      (funcall callback))
+    updated))
 
 (defun deterred-ai-compact-database ()
   "Back up and compact the DETERRED database explicitly.
