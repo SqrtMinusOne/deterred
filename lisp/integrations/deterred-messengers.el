@@ -30,6 +30,8 @@
 (require 'uuidgen)
 (require 'dom)
 (require 'iso8601)
+(require 'json)
+(require 'generator)
 
 (require 'deterred-db)
 (require 'deterred-source)
@@ -45,11 +47,35 @@
 (declare-function telega--getChats "telega-tdlib")
 (defvar telega--me-id)
 
+;; Rocket functions (optional dependency)
+(declare-function rocket-core-get "rocket-core" (object key &optional default))
+(declare-function rocket-core-time "rocket-core" (value))
+(declare-function rocket-core-request "rocket-core"
+                  (server-id method &optional params success error))
+(declare-function rocket-server-running-p "rocket-server" ())
+(declare-function rocket-server-states "rocket-core" ())
+(declare-function rocket-server-state-id "rocket-core" (state))
+(declare-function rocket-server-state-name "rocket-core" (state))
+(declare-function rocket-server-state-user-id "rocket-core" (state))
+(declare-function rocket-server-state-connection-state "rocket-core" (state))
+(declare-function rocket-user-get "rocket-core" (server-id user-id))
+(declare-function rocket-user-name "rocket-core" (user))
+(declare-function rocket-user-username "rocket-core" (user))
+
+;; MAX functions (optional dependency)
+(declare-function max-core-get "max-core" (object key &optional default))
+(declare-function max-core-time "max-core" (value))
+(declare-function max-core-request-sync "max-core" (method &optional params timeout))
+(declare-function max-connected-p "max-core" ())
+(declare-function max-account-state-get "max-core" (&optional account-id))
+(declare-function max-account-state-connection-state "max-core" (state))
+(declare-function max-server-running-p "max-server" ())
+
 (defconst deterred-messengers-uuid-namespace
   "d9536b80-3213-4321-b37f-ebf1b558a530")
 
 (defconst deterred-messengers-messenger-list
-  '("telegram" "vk" "discord")
+  '("telegram" "vk" "discord" "max" "rocket")
   "List of supported messenger names.")
 
 (defcustom deterred-messengers-my-id nil
@@ -72,6 +98,61 @@ VK exports times in MSK (UTC+3), so the default is -10800 seconds (-3 hours)
 to convert to UTC."
   :type 'integer
   :group 'deterred)
+
+(defcustom deterred-messengers-request-interval 1
+  "Minimum seconds between MAX or Rocket.Chat import requests."
+  :type 'number
+  :group 'deterred)
+
+(defcustom deterred-messengers-rate-limit-retries 5
+  "Maximum retries of a rate-limited MAX or Rocket.Chat import request."
+  :type 'integer
+  :group 'deterred)
+
+(defcustom deterred-messengers-rate-limit-wait 60
+  "Seconds to wait when a rate limit supplies no positive retry delay."
+  :type 'number
+  :group 'deterred)
+
+(defcustom deterred-messengers-rocket-start-dates nil
+  "Earliest Rocket.Chat import dates by configured workspace ID.
+Each entry maps a workspace symbol or string to a YYYY-MM-DD date.
+Messages at or after local midnight on that date can be imported in
+either direction.  A missing entry or nil date imposes no date limit.
+
+The limit also applies to resumed imports and historical backfills.
+It does not delete previously imported messages.  Moving the date earlier
+does not automatically backfill history excluded by a previous import."
+  :type '(alist :key-type (choice (symbol :tag "Workspace symbol")
+                                  (string :tag "Workspace string"))
+                :value-type (choice (const :tag "All history" nil)
+                                    (string :tag "Start date (YYYY-MM-DD)")))
+  :group 'deterred)
+
+(defcustom deterred-messengers-rocket-excluded-rooms nil
+  "Rocket.Chat rooms to skip, grouped by configured workspace ID.
+Each entry maps a workspace symbol or string to a list of room IDs or
+room names.  Match IDs and room/subscription names exactly and case
+sensitively, without regular expressions.  IDs remain valid after renaming.
+
+Excluded rooms make no history requests and do not count toward import
+progress.  Existing messages and saved pagination positions are retained.
+The setting is captured when an import starts; cancel and restart a running
+import to apply changes."
+  :type '(alist :key-type (choice (symbol :tag "Workspace symbol")
+                                  (string :tag "Workspace string"))
+                :value-type (repeat (string :tag "Room ID or name")))
+  :group 'deterred)
+
+(defcustom deterred-messengers-max-reconnect-timeout 30
+  "Seconds to wait for MAX's automatic reconnect during an import.
+This does not start or authenticate a stopped client.  Set to zero to fail
+immediately when MAX is reconnecting."
+  :type 'number
+  :group 'deterred)
+
+(defvar deterred-messengers--import-last-request (make-hash-table :test #'eq)
+  "Times of the last import requests, keyed by messenger symbol.")
 
 (defun deterred-messengers--id (messenger &rest ids)
   "Convert MESSENGER IDS into a unique UUID.
@@ -169,6 +250,163 @@ NAME and TARGET-USER-ID are just added into the resuling alist."
       (type . ,type)
       ,@(when target-user-id
           `((target_user_id . ,target-user-id))))))
+
+(defun deterred-messengers--import-key (&rest ids)
+  "Encode IDS as an unambiguous composite remote identifier."
+  (json-serialize (vconcat ids)))
+
+(defun deterred-messengers--import-wait (seconds)
+  "Wait SECONDS while allowing client processes to handle output.
+The user can interrupt the wait with `keyboard-quit'."
+  (let ((deadline (+ (float-time) seconds)))
+    (while (< (float-time) deadline)
+      (accept-process-output nil (max 0 (min 1 (- deadline (float-time))))))))
+
+(defun deterred-messengers--rate-limit-delay (payload)
+  "Return the retry delay in seconds supplied by error PAYLOAD."
+  (let ((milliseconds (plist-get (plist-get payload :data) :retry_after_ms))
+        (description (plist-get payload :message)))
+    (cond
+     ((and (numberp milliseconds) (> milliseconds 0)) (/ milliseconds 1000.0))
+     ((and (stringp description)
+           (string-match "\\b\\([0-9]+\\(?:\\.[0-9]+\\)?\\) seconds?\\b" description)
+           (> (string-to-number (match-string 1 description)) 0))
+      (string-to-number (match-string 1 description)))
+     (t (max 1 deterred-messengers-rate-limit-wait)))))
+
+(defun deterred-messengers--import-request (messenger request)
+  "Call REQUEST for MESSENGER with pacing and bounded rate-limit retries.
+MESSENGER is `max' or `rocket'.  REQUEST is a function of no arguments.
+Other errors propagate immediately."
+  (let ((retries 0) result done)
+    (while (not done)
+      (let ((delay (- deterred-messengers-request-interval
+                      (- (float-time)
+                         (gethash messenger deterred-messengers--import-last-request 0)))))
+        (when (> delay 0)
+          (deterred-messengers--import-wait delay)))
+      (puthash messenger (float-time) deterred-messengers--import-last-request)
+      (condition-case err
+          (setq result (funcall request) done t)
+        (error
+         (let* ((payload (cadr err))
+                (code (and (listp payload) (plist-get payload :code)))
+                (limited (equal code (if (eq messenger 'rocket)
+                                         "http-429" "rate-limited"))))
+           (unless (and limited (< retries deterred-messengers-rate-limit-retries))
+             (signal (car err) (cdr err)))
+           (cl-incf retries)
+           (let ((delay (deterred-messengers--rate-limit-delay payload)))
+             (message "%s rate limit: waiting %s seconds (retry %d/%d)..."
+                      messenger delay retries deterred-messengers-rate-limit-retries)
+             (deterred-messengers--import-wait delay))))))
+    result))
+
+(defun deterred-messengers--import-cutoff (db messenger chat-uuid &optional remote-chat-id)
+  "Return the incremental import cutoff for MESSENGER and CHAT-UUID in DB.
+Revisit one day before the latest stored message, or all history for a
+new chat.  For Rocket, REMOTE-CHAT-ID limits this to the original room,
+since multiple rooms share one workspace chat."
+  (let ((latest
+         (caar (if (and (equal messenger "rocket") remote-chat-id)
+                   (sqlite-select
+                    db "SELECT MAX(timestamp) FROM messenger_message
+                        WHERE messenger = 'rocket' AND rocket_room_id = ?"
+                    (list remote-chat-id))
+                 (when chat-uuid
+                   (sqlite-select
+                    db "SELECT MAX(timestamp) FROM messenger_message
+                        WHERE messenger = ? AND chat_id = ?"
+                    (list messenger chat-uuid)))))))
+    (if latest (max 0 (- latest 86400)) 0)))
+
+(defun deterred-messengers--import-state (db messenger remote-chat-id chat-uuid)
+  "Return the saved cursor and cutoff for a chat import in DB.
+MESSENGER and REMOTE-CHAT-ID identify the remote chat.  CHAT-UUID is used
+to calculate a fresh cutoff when there is no unfinished import."
+  (or (car (deterred-db-select-alist
+            db "SELECT cutoff, cursor FROM messenger_import_progress
+                WHERE messenger = ? AND remote_chat_id = ?"
+            (list messenger remote-chat-id)))
+      `((cutoff . ,(deterred-messengers--import-cutoff
+                    db messenger chat-uuid remote-chat-id))
+        (cursor . nil))))
+
+(defun deterred-messengers--rocket-move-room (db remote-room-id chat-id)
+  "Move existing REMOTE-ROOM-ID messages to CHAT-ID in DB.
+Keep chains belonging entirely to the moved room.  Invalidate chains
+shared with other rooms, whose derived time spans can no longer be reused.
+The caller must have inserted the target chat within a transaction."
+  (dolist (row (sqlite-select
+                db "SELECT DISTINCT chain_id FROM messenger_message
+                    WHERE messenger = 'rocket' AND rocket_room_id = ?
+                      AND chat_id != ? AND chain_id IS NOT NULL"
+                (list remote-room-id chat-id)))
+    (let ((chain-id (car row)))
+      (if (sqlite-select
+           db "SELECT 1 FROM messenger_message WHERE chain_id = ?
+               AND (messenger IS NOT 'rocket' OR rocket_room_id IS NOT ?) LIMIT 1"
+           (list chain-id remote-room-id))
+          (progn
+            (sqlite-execute db "UPDATE messenger_message SET chain_id = NULL
+                                WHERE chain_id = ?" (list chain-id))
+            (sqlite-execute db "DELETE FROM messenger_message_chain WHERE id = ?"
+                            (list chain-id)))
+        (sqlite-execute db "UPDATE messenger_message_chain SET chat_id = ? WHERE id = ?"
+                        (list chat-id chain-id)))))
+  (sqlite-execute
+   db "UPDATE messenger_message SET chat_id = ?
+       WHERE messenger = 'rocket' AND rocket_room_id = ? AND chat_id != ?"
+   (list chat-id remote-room-id chat-id)))
+
+(defun deterred-messengers--store-chat
+    (db messenger users chat messages &optional cutoff cursor remote-chat-id)
+  "Store CHAT data from MESSENGER in DB atomically.
+USERS and MESSAGES are insertion alists.  Update only supplied columns,
+preserving other messenger IDs and derived message metadata.  Return the
+number of messages.  With CUTOFF, also save the next page CURSOR, or clear
+the pending import when CURSOR is nil.  REMOTE-CHAT-ID overrides the
+checkpoint key for a Rocket room stored under a shared workspace chat."
+  (with-sqlite-transaction db
+    (sqlite-execute
+     db "INSERT INTO messenger_user (id, name) VALUES (?, 'Me')
+         ON CONFLICT (id) DO NOTHING"
+     (list deterred-messengers-my-id))
+    ;; Users may have different fields, notably the canonical self record.
+    (dolist (user users)
+      (deterred-db-insert-unsafe
+       db :table-name 'messenger_user :values (list user)
+       :conflict-action 'do-update :conflict-attrs '(id)))
+    (deterred-db-insert-unsafe
+     db :table-name 'messenger_chat :values (list chat)
+     :conflict-action 'do-update :conflict-attrs '(id))
+    (when (and (equal messenger "rocket") remote-chat-id)
+      (deterred-messengers--rocket-move-room db remote-chat-id (alist-get 'id chat)))
+    (let ((attrs `(id ,(intern (concat messenger "_id"))
+                     ,@(when (equal messenger "rocket") '(rocket_room_id)) sender_id chat_id
+                     content timestamp is_attachment messenger)))
+      (dolist (batch (seq-partition messages 500))
+        (deterred-db-insert-unsafe
+         db :table-name 'messenger_message :values batch :attrs attrs
+         :conflict-action 'do-update :conflict-attrs '(id))))
+    (when cutoff
+      (let ((remote-id (or remote-chat-id
+                           (alist-get (intern (concat messenger "_id")) chat))))
+        (if cursor
+            (sqlite-execute
+             db "INSERT INTO messenger_import_progress
+                 (messenger, remote_chat_id, cutoff, cursor) VALUES (?, ?, ?, ?)
+                 ON CONFLICT (messenger, remote_chat_id)
+                 DO UPDATE SET cutoff = excluded.cutoff, cursor = excluded.cursor"
+             (list messenger remote-id cutoff cursor))
+          (sqlite-execute
+           db "DELETE FROM messenger_import_progress
+               WHERE messenger = ? AND remote_chat_id = ?"
+           (list messenger remote-id)))))
+    (deterred-db-mark-updated-batch
+     db (append '(messenger_user messenger_chat messenger_message)
+                (when (equal messenger "rocket") '(messenger_message_chain)))))
+  (length messages))
 
 (defun deterred-messengers--telegram-process-chat
     (user-cache chat-cache chat my-telegram-id)
@@ -640,6 +878,10 @@ Run CALLBACK when done."
      ("Load VK HTML" deterred-messengers-load-vk-html nil)
      ("Load Telega" deterred-messengers-load-telega nil)
      ("Load Discord" deterred-messengers-load-discord)
+     ("Load Max" deterred-messengers-load-max nil)
+     ("Load Rocket" deterred-messengers-load-rocket t)
+     ("Rocket import status" deterred-messengers-rocket-import-status nil)
+     ("Cancel Rocket import" deterred-messengers-cancel-rocket-import nil)
      ("Process categories" deterred-messengers-categories-process-all-chats nil)
      ("Compute chains" deterred-messengers-chains-compute nil)
      ("Compute chain hostnames" deterred-messengers-chains-compute-hostname nil)
@@ -1332,6 +1574,731 @@ following files:
        :values (alist-get 'messages data)
        :conflict-action 'do-update
        :conflict-attrs '(id)))))
+
+(defun deterred-messengers--max-await-connection ()
+  "Wait for an existing MAX reconnect, or signal an actionable error.
+Allow client status events to run while waiting.  Never start the sidecar
+or retry disconnected, logged-out, or failed authentication states."
+  (unless (and (featurep 'max-core) (featurep 'max-server)
+               (max-server-running-p))
+    (user-error "MAX is not connected; start max.el first"))
+  (let ((deadline (+ (float-time)
+                     (max 0 deterred-messengers-max-reconnect-timeout)))
+        waiting)
+    (while (and (max-server-running-p) (not (max-connected-p))
+                (fboundp 'max-account-state-get)
+                (fboundp 'max-account-state-connection-state)
+                (when-let ((state (max-account-state-get)))
+                  (eq (max-account-state-connection-state state) 'reconnecting)))
+      (when (>= (float-time) deadline)
+        (user-error "MAX reconnect timed out; saved import progress can be resumed"))
+      (unless waiting
+        (setq waiting t)
+        (message "MAX is reconnecting; waiting to resume the import..."))
+      (deterred-messengers--import-wait
+       (min 0.25 (max 0 (- deadline (float-time))))))
+    (unless (and (max-server-running-p) (max-connected-p))
+      (user-error "MAX is disconnected; reconnect max.el and rerun the import"))))
+
+(defun deterred-messengers--max-request (method &optional params)
+  "Read MAX METHOD with PARAMS, waiting for an automatic reconnect."
+  (deterred-messengers--max-await-connection)
+  (deterred-messengers--import-request
+   'max
+   (lambda ()
+     ;; Pacing and rate-limit waits also process connection status events.
+     (deterred-messengers--max-await-connection)
+     (max-core-request-sync method params))))
+
+(defun deterred-messengers--max-user
+    (user-cache profiles self-id user-id &optional fallback-name)
+  "Return a DETERRED user row for MAX USER-ID.
+
+USER-CACHE maps MAX IDs to DETERRED UUIDs.  PROFILES contains normalized
+MAX profiles, SELF-ID identifies the account, and FALLBACK-NAME is used
+when the profile has no display name."
+  (if (equal user-id self-id)
+      `((id . ,deterred-messengers-my-id) (max_id . ,self-id))
+    (let ((profile (gethash user-id profiles)))
+      (deterred-messengers--get-or-create-user
+       user-cache "max" user-id
+       (or (max-core-get profile :name)
+           (max-core-get profile :username)
+           fallback-name
+           (format "MAX user %s" user-id))))))
+
+(defun deterred-messengers--max-import-chat
+    (db chat user-cache chat-cache profiles self-id)
+  "Import all message directions from MAX CHAT into DB.
+
+USER-CACHE and CHAT-CACHE map MAX IDs to DETERRED UUIDs.  PROFILES
+contains normalized MAX profiles and SELF-ID is the current account.
+Save each fetched page together with its continuation cursor.  After
+an interruption, resume at that cursor using the original cutoff.
+Return the number of imported messages."
+  (let* ((chat-id (max-core-get chat :id))
+         (name (or (max-core-get chat :displayName)
+                   (max-core-get chat :name)
+                   (format "MAX chat %s" chat-id)))
+         (type (if (equal (max-core-get chat :type) "direct")
+                   "personal_chat" "group"))
+         (chat-row (deterred-messengers--get-or-create-chat
+                    chat-cache "max" chat-id name type))
+         (chat-uuid (alist-get 'id chat-row))
+         (state (deterred-messengers--import-state db "max" chat-id chat-uuid))
+         (cutoff (alist-get 'cutoff state))
+         (before (alist-get 'cursor state))
+         (before-time
+          (when before
+            (caar (sqlite-select
+                   db "SELECT timestamp FROM messenger_message
+                       WHERE messenger = 'max' AND chat_id = ? AND max_id = ?"
+                   (list chat-uuid before)))))
+         (seen-cursors (make-hash-table :test #'equal))
+         (seen-messages (make-hash-table :test #'equal))
+         (count 0)
+         finished)
+    (unless (and (stringp chat-id) (not (string-empty-p chat-id)))
+      (error "MAX returned a chat without an ID"))
+    (when before
+      (puthash before t seen-cursors))
+    (while (not finished)
+      (let* ((result (deterred-messengers--max-request
+                      "history.get"
+                      (append (list :chatId chat-id :limit 100)
+                              (when before (list :before before)))))
+             (payload (max-core-get result :messages 'missing))
+             (page (if (or (listp payload) (vectorp payload))
+                       (append payload nil)
+                     (error "MAX returned invalid history in %s" name)))
+             (has-more (max-core-get result :hasMore 'missing))
+             (users (make-hash-table :test #'equal))
+             messages)
+        (unless (memq has-more '(t nil :false false json-false :null))
+          (error "MAX returned an invalid history continuation flag in %s" name))
+        (dolist (profile (append (max-core-get result :users) nil))
+          (puthash (max-core-get profile :id) profile profiles))
+        (puthash deterred-messengers-my-id
+                 (deterred-messengers--max-user
+                  user-cache profiles self-id self-id)
+                 users)
+        (when (equal type "personal_chat")
+          (let ((peers (seq-remove
+                        (lambda (id) (equal id self-id))
+                        (append (max-core-get chat :participantIds) nil))))
+            (when (= (length peers) 1)
+              (let* ((user (deterred-messengers--max-user
+                            user-cache profiles self-id (car peers) name))
+                     (uuid (alist-get 'id user)))
+                (puthash uuid user users)
+                (setf (alist-get 'target_user_id chat-row) uuid)))))
+        (dolist (msg page)
+          (let* ((message-id (max-core-get msg :id))
+                 (timestamp (floor (max-core-time
+                                    (max-core-get msg :timestamp)))))
+            (unless (and (stringp message-id)
+                         (not (string-empty-p message-id))
+                         (> timestamp 0))
+              (error "MAX returned a message without an ID or timestamp in %s" name))
+            (when (and (>= timestamp cutoff)
+                       (not (gethash message-id seen-messages)))
+              (let* ((sender-id
+                      (or (max-core-get msg :userId)
+                          (deterred-messengers--import-key
+                           "system" chat-id)))
+                     (user (deterred-messengers--max-user
+                            user-cache profiles self-id sender-id
+                            (or (max-core-get msg :username) name)))
+                     (sender-uuid (alist-get 'id user)))
+                (puthash sender-uuid user users)
+                (push `((id . ,(deterred-messengers--id
+                                "max" (deterred-messengers--import-key
+                                       chat-id message-id)))
+                        (max_id . ,message-id)
+                        (sender_id . ,sender-uuid)
+                        (chat_id . ,chat-uuid)
+                        (content . ,(or (max-core-get msg :text) ""))
+                        (timestamp . ,timestamp)
+                        (is_attachment . ,(if (seq-empty-p
+                                               (max-core-get msg :attachments))
+                                              0 1))
+                        (messenger . "max"))
+                      messages)))
+            (puthash message-id t seen-messages)))
+        (if (null page)
+            (if (memq has-more '(nil :false false json-false :null))
+                (setq finished t)
+              (error "MAX returned an empty history page with more data in %s" name))
+          (let* ((oldest (car page))
+                 (cursor (max-core-get oldest :id))
+                 (oldest-time (floor (max-core-time
+                                      (max-core-get oldest :timestamp)))))
+            (when (or (gethash cursor seen-cursors)
+                      (and before-time (> oldest-time before-time)))
+              (error "MAX history did not advance in %s" name))
+            (setq finished
+                  (or (< oldest-time cutoff)
+                      (memq has-more '(nil :false false json-false :null))))
+            (unless finished
+              (puthash cursor t seen-cursors)
+              (setq before cursor before-time oldest-time))))
+        (cl-incf count
+                 (deterred-messengers--store-chat
+                  db "max" (hash-table-values users) chat-row
+                  (nreverse messages) cutoff (unless finished before)))))
+    count))
+
+(defun deterred-messengers-load-max ()
+  "Import all available MAX chats and message directions into DETERRED.
+
+The first import downloads full history.  Subsequent imports revisit
+the last imported day separately for each chat.  Interrupted imports
+resume after their last saved page.  MAX must already be connected;
+this command does not start or authenticate the client."
+  (interactive)
+  (unless (and (stringp deterred-messengers-my-id)
+               (not (string-empty-p (string-trim deterred-messengers-my-id))))
+    (user-error "Set deterred-messengers-my-id before importing MAX"))
+  (let* ((snapshot (deterred-messengers--max-request "sync.initial"))
+         (account (max-core-get snapshot :account))
+         (self-id (max-core-get account :id))
+         (chats (append (max-core-get snapshot :chats) nil))
+         (profiles (make-hash-table :test #'equal)))
+    (unless (and (stringp self-id) (not (string-empty-p self-id)))
+      (user-error "MAX did not return the connected account ID"))
+    (dolist (profile (append (max-core-get snapshot :users) nil))
+      (puthash (max-core-get profile :id) profile profiles))
+    (puthash self-id account profiles)
+    (let* ((db (deterred-db--init))
+           (user-cache (deterred-messengers--load-users-by-messenger db "max"))
+           (chat-cache (deterred-messengers--load-chats-by-messenger db "max"))
+           (count 0))
+      (puthash self-id deterred-messengers-my-id user-cache)
+      (cl-loop for chat in chats
+               for index from 1
+               do (progn
+                    (message "Importing MAX chat %d/%d..." index (length chats))
+                    (cl-incf count
+                             (deterred-messengers--max-import-chat
+                              db chat user-cache chat-cache profiles self-id))))
+      (message "Successfully imported MAX data: %d messages" count))))
+
+(defun deterred-messengers--rocket-start-timestamp (server)
+  "Return SERVER's configured local-midnight import timestamp, or zero.
+Reject malformed dates and impossible calendar dates before importing."
+  (let* ((entry (seq-find
+                 (lambda (item)
+                   (equal (format "%s" (car item)) (format "%s" server)))
+                 deterred-messengers-rocket-start-dates))
+         (date (cdr entry)))
+    (if (null date)
+        0
+      (save-match-data
+        (unless (and (stringp date)
+                     (string-match
+                      "\\`\\([0-9]\\{4\\}\\)-\\([0-9]\\{2\\}\\)-\\([0-9]\\{2\\}\\)\\'"
+                      date))
+          (user-error "Invalid Rocket.Chat start date for %s: %S; expected YYYY-MM-DD"
+                      server date))
+        (let* ((year (string-to-number (match-string 1 date)))
+               (month (string-to-number (match-string 2 date)))
+               (day (string-to-number (match-string 3 date)))
+               (time (condition-case nil
+                         (encode-time 0 0 0 day month year)
+                       (error nil)))
+               (decoded (and time (decode-time time))))
+          ;; encode-time accepts February 30 by rolling into March.  Require
+          ;; the decoded calendar fields to match rather than normalizing it.
+          (unless (and (> year 0) decoded
+                       (= year (nth 5 decoded))
+                       (= month (nth 4 decoded))
+                       (= day (nth 3 decoded)))
+            (user-error "Invalid Rocket.Chat calendar date for %s: %S" server date))
+          (time-convert time 'integer))))))
+
+(cl-defstruct (deterred-messengers--rocket-job
+               (:constructor deterred-messengers--make-rocket-job))
+  "A background Rocket import and its current progress."
+  iterator timer request token self-id callback error resume-at
+  (status 'running) (count 0) (retries 0) progress)
+
+(defvar deterred-messengers--rocket-import-job nil
+  "Current or most recent background Rocket import.")
+
+(defun deterred-messengers--rocket-active-p (job)
+  "Return non-nil if JOB is the current active Rocket import."
+  (and job (eq job deterred-messengers--rocket-import-job)
+       (memq (deterred-messengers--rocket-job-status job)
+             '(running waiting requesting))))
+
+(defun deterred-messengers--rocket-progress (job)
+  "Describe the remaining chats in each workspace of JOB."
+  (mapconcat
+   (lambda (progress)
+     (let ((server (plist-get progress :server))
+           (total (plist-get progress :total))
+           (completed (plist-get progress :completed))
+           (chat (plist-get progress :chat)))
+       (if total
+           (format "%s: %d/%d chats complete, %d remaining%s"
+                   server completed total (- total completed)
+                   (if chat (format " (%s)" chat) ""))
+         (format "%s: waiting for chat list" server))))
+   (deterred-messengers--rocket-job-progress job) "; "))
+
+(defun deterred-messengers-rocket-import-status ()
+  "Show background Rocket import progress for every selected server."
+  (interactive)
+  (let ((job deterred-messengers--rocket-import-job))
+    (unless job (user-error "No Rocket import has been started"))
+    (message "Rocket import %s%s%s; %d messages saved. %s"
+             (deterred-messengers--rocket-job-status job)
+             (if-let ((deadline (deterred-messengers--rocket-job-resume-at job)))
+                 (format " (resumes in %ds)" (ceiling (max 0 (- deadline (float-time)))))
+               "")
+             (if-let ((err (deterred-messengers--rocket-job-error job)))
+                 (concat ": " (error-message-string err)) "")
+             (deterred-messengers--rocket-job-count job)
+             (deterred-messengers--rocket-progress job))))
+
+(defun deterred-messengers--rocket-finish (job status &optional err)
+  "Finish JOB with STATUS and optional error condition ERR."
+  (when (deterred-messengers--rocket-active-p job)
+    (when (deterred-messengers--rocket-job-timer job)
+      (cancel-timer (deterred-messengers--rocket-job-timer job)))
+    ;; Invalidate callbacks before closing the iterator or notifying the UI.
+    (setf (deterred-messengers--rocket-job-status job) status
+          (deterred-messengers--rocket-job-error job) err
+          (deterred-messengers--rocket-job-timer job) nil
+          (deterred-messengers--rocket-job-token job) nil
+          (deterred-messengers--rocket-job-resume-at job) nil)
+    (iter-close (deterred-messengers--rocket-job-iterator job))
+    (setf (deterred-messengers--rocket-job-iterator job) nil
+          (deterred-messengers--rocket-job-request job) nil)
+    (message "Rocket import %s: %d messages saved%s. %s"
+             status (deterred-messengers--rocket-job-count job)
+             (if err (concat "; " (error-message-string err)) "")
+             (deterred-messengers--rocket-progress job))
+    (when-let ((callback (deterred-messengers--rocket-job-callback job)))
+      (setf (deterred-messengers--rocket-job-callback job) nil)
+      (funcall callback))))
+
+(defun deterred-messengers-cancel-rocket-import ()
+  "Cancel the background Rocket import, retaining all saved pages."
+  (interactive)
+  (unless (deterred-messengers--rocket-active-p deterred-messengers--rocket-import-job)
+    (user-error "No Rocket import is running"))
+  (deterred-messengers--rocket-finish deterred-messengers--rocket-import-job 'cancelled))
+
+(defun deterred-messengers--rocket-step (job function args)
+  "Run FUNCTION with JOB and ARGS, catching background failures."
+  (when (deterred-messengers--rocket-active-p job)
+    (setf (deterred-messengers--rocket-job-timer job) nil
+          (deterred-messengers--rocket-job-resume-at job) nil
+          (deterred-messengers--rocket-job-status job) 'running)
+    (let ((deterred-messengers-my-id (deterred-messengers--rocket-job-self-id job)))
+      (condition-case err
+          (apply function job args)
+        (quit (deterred-messengers--rocket-finish job 'cancelled))
+        (error (deterred-messengers--rocket-finish job 'failed err))))))
+
+(defun deterred-messengers--rocket-schedule (job delay function &rest args)
+  "Run FUNCTION with JOB and ARGS after DELAY, returning to Emacs meanwhile."
+  (when (deterred-messengers--rocket-active-p job)
+    (setf (deterred-messengers--rocket-job-status job) (if (> delay 0) 'waiting 'running)
+          (deterred-messengers--rocket-job-resume-at job)
+          (when (> delay 0) (+ (float-time) delay))
+          (deterred-messengers--rocket-job-timer job)
+          (run-at-time delay nil #'deterred-messengers--rocket-step job function args))))
+
+(defun deterred-messengers--rocket-request-failed (job payload)
+  "Retry JOB's current request after a rate limit in PAYLOAD, or fail."
+  (if (and (equal (plist-get payload :code) "http-429")
+           (< (deterred-messengers--rocket-job-retries job)
+              deterred-messengers-rate-limit-retries))
+      (let ((delay (deterred-messengers--rate-limit-delay payload)))
+        (cl-incf (deterred-messengers--rocket-job-retries job))
+        (message "Rocket.Chat %s rate limit: resuming in %s seconds (retry %d/%d). %s"
+                 (car (deterred-messengers--rocket-job-request job)) delay
+                 (deterred-messengers--rocket-job-retries job)
+                 deterred-messengers-rate-limit-retries
+                 (deterred-messengers--rocket-progress job))
+        (deterred-messengers--rocket-schedule
+         job delay #'deterred-messengers--rocket-send))
+    (deterred-messengers--rocket-finish job 'failed (list 'rocket-server-error payload))))
+
+(defun deterred-messengers--rocket-send (job)
+  "Send JOB's current request asynchronously, respecting request pacing."
+  (let ((delay (- deterred-messengers-request-interval
+                  (- (float-time)
+                     (gethash 'rocket deterred-messengers--import-last-request 0)))))
+    (if (> delay 0)
+        (deterred-messengers--rocket-schedule job delay #'deterred-messengers--rocket-send)
+      ;; Rocket's request API would otherwise start a stopped sidecar itself.
+      (unless (rocket-server-running-p)
+        (user-error "Rocket stopped during import; reconnect and rerun the import"))
+      (let ((token (make-symbol "rocket-request")))
+        (setf (deterred-messengers--rocket-job-token job) token
+              (deterred-messengers--rocket-job-status job) 'requesting)
+        (puthash 'rocket (float-time) deterred-messengers--import-last-request)
+        (apply
+         #'rocket-core-request
+         (append
+          (deterred-messengers--rocket-job-request job)
+          (list
+           (lambda (result)
+             (when (and (deterred-messengers--rocket-active-p job)
+                        (eq token (deterred-messengers--rocket-job-token job)))
+               (setf (deterred-messengers--rocket-job-token job) nil)
+               (deterred-messengers--rocket-schedule
+                job 0 #'deterred-messengers--rocket-advance result)))
+           (lambda (payload)
+             (when (and (deterred-messengers--rocket-active-p job)
+                        (eq token (deterred-messengers--rocket-job-token job)))
+               (setf (deterred-messengers--rocket-job-token job) nil)
+               (deterred-messengers--rocket-schedule
+                job 0 #'deterred-messengers--rocket-request-failed payload))))))))))
+
+(defun deterred-messengers--rocket-advance (job &optional result)
+  "Give RESULT to JOB's iterator and schedule its next request."
+  (condition-case nil
+      (progn
+        (setf (deterred-messengers--rocket-job-request job)
+              (iter-next (deterred-messengers--rocket-job-iterator job) result)
+              (deterred-messengers--rocket-job-retries job) 0)
+        (deterred-messengers--rocket-schedule job 0 #'deterred-messengers--rocket-send))
+    (iter-end-of-sequence (deterred-messengers--rocket-finish job 'complete))))
+
+(iter-defun deterred-messengers--rocket-request (server method &optional params)
+  "Yield a Rocket request for SERVER's METHOD with PARAMS to the job driver."
+  (iter-yield (list server method params)))
+
+(iter-defun deterred-messengers--rocket-inventory (server)
+  "Return fresh (ROOM-ID ROOM SUBSCRIPTION) records for SERVER."
+  (let* ((snapshot (iter-yield-from
+                    (deterred-messengers--rocket-request server "sync.initial")))
+         (rooms (make-hash-table :test #'equal))
+         order)
+    (dolist (kind '(:subscriptions :rooms))
+      (let* ((response (rocket-core-get snapshot kind))
+             (items (rocket-core-get response :update :missing)))
+        (unless (or (listp items) (vectorp items))
+          (error "Rocket returned an invalid %s inventory" kind))
+        (seq-doseq (item items)
+          (let* ((id (rocket-core-get item
+                                      (if (eq kind :rooms) :_id :rid)))
+                 (entry (and id (gethash id rooms))))
+            (unless (and (stringp id) (not (string-empty-p id)))
+              (error "Rocket returned a room without an ID"))
+            (unless entry
+              (setq entry (list id nil nil))
+              (puthash id entry rooms)
+              (push id order))
+            (setf (nth (if (eq kind :rooms) 1 2) entry) item)))))
+    ;; A hidden subscription may be absent from rooms.get; retain it without
+    ;; admitting old rooms from Rocket's normalized cache.
+    (mapcar (lambda (id) (gethash id rooms)) (nreverse order))))
+
+(defun deterred-messengers--rocket-chat-data
+    (server own-id entry user-cache chat-cache &optional server-name)
+  "Convert SERVER room ENTRY into (USERS CHAT) for database insertion.
+OWN-ID is the authenticated user.  USER-CACHE and CHAT-CACHE map scoped
+Rocket identifiers to existing DETERRED UUIDs.  Groups share one chat named
+SERVER-NAME, falling back to SERVER; personal chats retain room identities."
+  (pcase-let* ((`(,room-id ,room ,subscription) entry)
+               (room-type (or (rocket-core-get room :t)
+                              (rocket-core-get subscription :t)))
+               (members (delete-dups
+                         (append (or (rocket-core-get room :uids)
+                                     (rocket-core-get subscription :uids)) nil)))
+               (others (remove own-id members))
+               (member-count (or (rocket-core-get room :usersCount)
+                                 (rocket-core-get subscription :usersCount)))
+               ;; Rocket uses "d" for both personal and multi-user DMs.
+               ;; Hidden subscriptions may omit membership entirely.
+               (group-p (or (not (equal room-type "d"))
+                            (> (length members) 2)
+                            (> (length others) 1)
+                            (and (numberp member-count) (> member-count 2))
+                            (not (or members
+                                     (and (numberp member-count)
+                                          (> member-count 0)
+                                          (<= member-count 2))))))
+               (name (or (rocket-core-get subscription :fname)
+                         (rocket-core-get room :fname)
+                         (rocket-core-get subscription :name)
+                         (rocket-core-get room :name)
+                         room-id))
+               (target nil)
+               (users nil))
+    (when (and (not group-p) (= (length others) 1))
+      (let* ((other-id (car others))
+             (profile (rocket-user-get server other-id))
+             (user (deterred-messengers--get-or-create-user
+                    user-cache "rocket"
+                    (deterred-messengers--import-key
+                     (format "%s" server) other-id)
+                    (or (and profile (rocket-user-name profile))
+                        (and profile (rocket-user-username profile))
+                        (rocket-core-get subscription :fname)
+                        (rocket-core-get subscription :name)
+                        other-id))))
+        (setq target (alist-get 'id user))
+        (unless (equal target deterred-messengers-my-id)
+          (push user users))))
+    (when (and (not group-p) members (null others))
+      (setq target deterred-messengers-my-id))
+    (list users
+          (deterred-messengers--get-or-create-chat
+           chat-cache "rocket"
+           (if group-p
+               (deterred-messengers--import-key (format "%s" server))
+             (deterred-messengers--import-key (format "%s" server) room-id))
+           (if group-p (or server-name (format "%s" server)) name)
+           (if group-p "group" "personal_chat") target))))
+
+(iter-defun deterred-messengers--rocket-import-chat
+    (db server own-id room-id users chat &optional user-cache start-timestamp job)
+  "Import SERVER's messages in ROOM-ID into DB for CHAT.
+OWN-ID is the authenticated user ID.  USERS and CHAT are insertion alists.
+USER-CACHE maps scoped Rocket user identifiers to existing DETERRED UUIDs.
+START-TIMESTAMP is the earliest allowed Unix timestamp, defaulting to the
+date configured for SERVER in `deterred-messengers-rocket-start-dates'.
+Search includes thread replies, both directions in personal chats, and only
+sent messages in groups.  Save each page and its next offset together,
+retaining the original cutoff until the chat is complete.  Resume
+interrupted imports at their saved offset.
+Update JOB's saved message count after each page and return the room count."
+  (let* ((chat-id (alist-get 'id chat))
+         (room-key (deterred-messengers--import-key (format "%s" server) room-id))
+         (personal-p (equal (alist-get 'type chat) "personal_chat"))
+         (user-cache (or user-cache
+                         (deterred-messengers--load-users-by-messenger db "rocket")))
+         (sender-users (make-hash-table :test #'equal))
+         ;; If membership becomes available later, revisit received history
+         ;; that was previously excluded by the conservative sent-only policy.
+         (state (if (or (and personal-p
+                             (not (equal (caar (sqlite-select
+                                                db "SELECT type FROM messenger_chat WHERE id = ?"
+                                                (list chat-id))) "personal_chat")))
+                        (sqlite-select
+                         db "SELECT 1 FROM messenger_message m
+                             JOIN messenger_chat c ON c.id = m.chat_id
+                             WHERE m.messenger = 'rocket' AND m.rocket_room_id = ?
+                               AND c.type != ? LIMIT 1"
+                         (list room-key (alist-get 'type chat))))
+                    '((cutoff . 0) (cursor . nil))
+                  (deterred-messengers--import-state
+                   db "rocket" room-key chat-id)))
+         (cutoff (max (alist-get 'cutoff state)
+                      (or start-timestamp
+                          (deterred-messengers--rocket-start-timestamp server))))
+         (cursor (alist-get 'cursor state))
+         (offset (if cursor (string-to-number cursor) 0))
+         (seen (make-hash-table :test #'equal))
+         (count 0)
+         done)
+    (dolist (user users)
+      (puthash (alist-get 'rocket_id user) user sender-users))
+    (when (and cursor
+               (not (string-match-p "\\`[0-9]+\\'" cursor)))
+      (error "Invalid saved Rocket history offset for room %s" room-id))
+    (while (not done)
+      (let* ((response
+              (iter-yield-from (deterred-messengers--rocket-request
+               server "message.search"
+               `((room-id . ,room-id)
+                 ;; The server consumes only "desc" from "descend", leaving
+                 ;; "end" as a text query.  An order-only query returns no
+                 ;; results, so use a date before Rocket existed for all DMs.
+                 (text . ,(if personal-p "after:01/01/1970 order:desc"
+                            "from:me order:desc"))
+                 (offset . ,offset)
+                 (count . 100)))))
+             (page (rocket-core-get response :messages :missing))
+             (total (rocket-core-get response :total))
+             (new-count 0)
+             (page-users (copy-sequence users))
+             messages older)
+        (unless (or (listp page) (vectorp page))
+          (error "Rocket returned invalid message search results"))
+        (seq-doseq (message page)
+          (let* ((id (rocket-core-get message :_id))
+                 (timestamp (rocket-core-time (rocket-core-get message :ts)))
+                 (sender (rocket-core-get (rocket-core-get message :u) :_id)))
+            (unless (and (stringp id) (not (string-empty-p id))
+                         (> timestamp 0))
+              (error "Rocket returned a message without an ID or timestamp"))
+            (when (< timestamp cutoff)
+              (setq older t))
+            (unless (gethash id seen)
+              (puthash id t seen)
+              (cl-incf new-count)
+              ;; Keep groups sent-only even if the server ignores from:me.
+              (when (and (or personal-p (equal sender own-id))
+                         (equal (rocket-core-get message :rid) room-id)
+                         (>= timestamp cutoff))
+                (unless (and (stringp sender) (not (string-empty-p sender)))
+                  (error "Rocket returned a message without a sender ID"))
+                (let* ((key (deterred-messengers--import-key
+                             (format "%s" server) id))
+                       (sender-id
+                        (if (equal sender own-id)
+                            deterred-messengers-my-id
+                          (let* ((user-key (deterred-messengers--import-key
+                                            (format "%s" server) sender))
+                                 (user
+                                  (or (gethash user-key sender-users)
+                                      (let ((profile (rocket-user-get server sender))
+                                            (author (rocket-core-get message :u)))
+                                        (deterred-messengers--get-or-create-user
+                                         user-cache "rocket" user-key
+                                         (or (and profile (rocket-user-name profile))
+                                             (rocket-core-get author :name)
+                                             (and profile (rocket-user-username profile))
+                                             (rocket-core-get author :username)
+                                             sender))))))
+                            (puthash user-key user sender-users)
+                            (cl-pushnew user page-users :test #'equal)
+                            (alist-get 'id user)))))
+                  (push
+                   `((id . ,(deterred-messengers--id "rocket" key))
+                     (rocket_id . ,key)
+                     (rocket_room_id . ,room-key)
+                     (sender_id . ,sender-id)
+                     (chat_id . ,chat-id)
+                     (content . ,(or (rocket-core-get message :msg) ""))
+                     (timestamp . ,(floor timestamp))
+                     (is_attachment
+                      . ,(if (or (not (seq-empty-p
+                                       (rocket-core-get message :attachments)))
+                                 (not (seq-empty-p
+                                       (rocket-core-get message :files)))
+                                 (rocket-core-get message :file))
+                             1 0))
+                     (messenger . "rocket"))
+                   messages))))))
+        (when (and (> (length page) 0) (= new-count 0))
+          (error "Rocket message pagination made no progress in room %s" room-id))
+        (cl-incf offset (length page))
+        ;; A server can cap pages below the requested size.  Without a total,
+        ;; continue until an empty page rather than truncating the import.
+        (setq done (or (zerop (length page)) older
+                       (and (numberp total) (>= offset total))))
+        ;; Persist the unchanged cutoff alongside every page.  Otherwise the
+        ;; newly stored latest message would hide unfinished older history on
+        ;; restart.  Even a fully filtered page advances its remote offset.
+        (let ((stored (deterred-messengers--store-chat
+                       db "rocket" page-users chat (nreverse messages) cutoff
+                       (unless done (number-to-string offset)) room-key)))
+          (cl-incf count stored)
+          (when job (cl-incf (deterred-messengers--rocket-job-count job) stored)))))
+    count))
+
+(defun deterred-messengers--rocket-room-excluded-p (server entry exclusions)
+  "Return non-nil if SERVER's room ENTRY matches configured EXCLUSIONS."
+  (let ((rooms (cdr (seq-find
+                    (lambda (item)
+                      (equal (format "%s" (car item)) (format "%s" server)))
+                    exclusions))))
+    (seq-some (lambda (value) (and (stringp value) (member value rooms)))
+              (list (car entry)
+                    (rocket-core-get (nth 1 entry) :name)
+                    (rocket-core-get (nth 2 entry) :name)))))
+
+(iter-defun deterred-messengers--rocket-import-run
+    (job states start-times db excluded-rooms)
+  "Import STATES into DB for JOB using START-TIMES and EXCLUDED-ROOMS."
+  (let ((user-cache (deterred-messengers--load-users-by-messenger db "rocket"))
+        (chat-cache (deterred-messengers--load-chats-by-messenger db "rocket")))
+    (cl-loop
+     for state in states
+     for progress in (deterred-messengers--rocket-job-progress job)
+     do
+     (let ((server (rocket-server-state-id state))
+           (server-name (rocket-server-state-name state))
+           (own-id (rocket-server-state-user-id state)))
+       (message "Rocket.Chat %s: fetching chat list..." server)
+       (let ((entries (seq-remove
+                       (lambda (entry)
+                         (deterred-messengers--rocket-room-excluded-p
+                          server entry excluded-rooms))
+                       (iter-yield-from (deterred-messengers--rocket-inventory server)))))
+         (setf (plist-get progress :total) (length entries))
+         (dolist (entry entries)
+           (pcase-let ((`(,users ,chat)
+                        (deterred-messengers--rocket-chat-data
+                         server own-id entry user-cache chat-cache server-name)))
+             (setf (plist-get progress :chat)
+                   (or (rocket-core-get (nth 2 entry) :name)
+                       (rocket-core-get (nth 1 entry) :name) (car entry)))
+             (message "Importing Rocket.Chat %s: chat %d/%d (%d remaining after this): %s..."
+                      server (1+ (plist-get progress :completed)) (length entries)
+                      (- (length entries) (plist-get progress :completed) 1)
+                      (plist-get progress :chat))
+             (iter-yield-from
+               (deterred-messengers--rocket-import-chat
+                db server own-id (car entry) users chat user-cache
+                (alist-get server start-times nil nil #'equal) job))
+             (cl-incf (plist-get progress :completed))
+             (setf (plist-get progress :chat) nil))))))))
+
+(defun deterred-messengers-load-rocket (&optional callback)
+  "Start a background Rocket.Chat import from authenticated workspaces.
+Include both directions in personal chats and only sent messages in groups.
+Group messages share one chat per workspace; personal chats remain separate.
+Use running rocket.el sessions without starting or logging into a client.
+The first import retrieves all available history; subsequent imports refresh
+each room from its last stored message minus one day, including replies.
+Interrupted imports resume at their last saved page.  All imports respect
+`deterred-messengers-rocket-start-dates' and
+`deterred-messengers-rocket-excluded-rooms'.
+Return the job immediately.  CALLBACK, when non-nil, is called without
+arguments when the job completes, fails, or is cancelled.  Use
+`deterred-messengers-rocket-import-status' to inspect progress and
+`deterred-messengers-cancel-rocket-import' to stop the job."
+  (interactive)
+  (when (deterred-messengers--rocket-active-p deterred-messengers--rocket-import-job)
+    (user-error "A Rocket import is already running; check its status or cancel it"))
+  (unless (and (stringp deterred-messengers-my-id)
+               (not (string-empty-p (string-trim deterred-messengers-my-id))))
+    (user-error "Set deterred-messengers-my-id before importing Rocket.Chat"))
+  (unless (and (featurep 'rocket-core)
+               (fboundp 'rocket-server-running-p)
+               (rocket-server-running-p))
+    (user-error "Rocket is not running; start rocket.el before importing"))
+  (let ((states
+         (seq-filter
+          (lambda (state)
+            (and (stringp (rocket-server-state-user-id state))
+                 (not (string-empty-p (rocket-server-state-user-id state)))
+                 (memq (rocket-server-state-connection-state state)
+                       '(authenticated connecting connected reconnecting ready))))
+          (rocket-server-states))))
+    (unless states
+      (user-error "Rocket has no authenticated workspaces"))
+    (let* ((start-times
+            ;; Validate every selected workspace before any RPC or DB access.
+            (mapcar (lambda (state)
+                      (let ((server (rocket-server-state-id state)))
+                        (cons server
+                              (deterred-messengers--rocket-start-timestamp server))))
+                    states))
+           (db (deterred-db--init))
+           (job (deterred-messengers--make-rocket-job
+                 :self-id deterred-messengers-my-id :callback callback
+                 :progress (mapcar (lambda (state)
+                                     (list :server (rocket-server-state-id state)
+                                           :total nil :completed 0 :chat nil))
+                                   states))))
+      (setf (deterred-messengers--rocket-job-iterator job)
+            (deterred-messengers--rocket-import-run
+             job states start-times db
+             (copy-tree deterred-messengers-rocket-excluded-rooms)))
+      (setq deterred-messengers--rocket-import-job job)
+      (deterred-messengers--rocket-schedule job 0 #'deterred-messengers--rocket-advance)
+      (message "Rocket.Chat import started in the background (%d servers)" (length states))
+      job)))
 
 (defun deterred-messengers-delete-duplicates ()
   "Delete duplicate messages from DETERRED."

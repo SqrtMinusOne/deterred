@@ -113,6 +113,8 @@ The implemented sources are as follows:
 | [[https://podorozhnik.spb.ru/][Подорожник]]       | =deterred-transport=        | API                  |
 | [[https://hledger.org/][hledger]]          | =deterred-hledger=          | CLI                  |
 | [[https://discord.com/][Discord]]          | =deterred-messengers=       | Dumps                |
+| MAX              | =deterred-messengers=       | max.el               |
+| Rocket.Chat      | =deterred-messengers=       | rocket.el            |
 | [[https://www.orgroam.com/][org-roam]]         | =deterred-org-roam=         | Org files + git      |
 | [[https://claude.com/product/claude-code][Claude Code]]      | =deterred-ai=               | State folder         |
 | [[https://openai.com/codex/][OpenAI Codex]]     | =deterred-ai=               | State folder         |
