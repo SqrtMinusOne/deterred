@@ -30,6 +30,8 @@
 (require 'deterred-db)
 (require 'deterred-format)
 (require 'deterred-grid)
+(require 'deterred-chains)
+(require 'calendar)
 
 (defclass deterred-dashboard-fit (deterred-dashboard)
   ((name :initform "FIT"))
@@ -66,7 +68,77 @@
      (name . "Activities vs transport trips per week"))
     (activities-vs-podcasts-per-week
      (name . "Activities vs podcasts listened per week"))
+    (cycling-hourly (name . "Hourly cycling probability (%)"))
     (numbers-data (name . "Numerical data"))))
+
+(defun deterred-dashboard-fit--cycling-hourly (db params)
+  "Return a 24-hour cycling probability profile from DB using PARAMS.
+Use Emacs's local timezone, since FIT stores no original UTC offsets.
+Every calendar day in the selected period contributes, including days
+without rides.  Open bounds use the first and last valid FIT activity
+dates across all sports.  Clip rides to the inclusive timestamp bounds,
+and union overlapping clock time per date/hour.  Repeated DST minutes
+count once, as in the Google Health profile.  With no bounded period,
+return nil probabilities rather than inventing observed zeroes."
+  (cl-labels
+      ((midnight (timestamp &optional next)
+         (let ((date (decode-time timestamp)))
+           ;; Re-encode in the local zone, not the endpoint's fixed offset.
+           (time-convert
+            (encode-time 0 0 0 (+ (decoded-time-day date) (if next 1 0))
+                         (decoded-time-month date) (decoded-time-year date))
+            'integer)))
+       (day-number (timestamp)
+         (let ((date (decode-time timestamp)))
+           (calendar-absolute-from-gregorian
+            (list (decoded-time-month date) (decoded-time-day date)
+                  (decoded-time-year date))))))
+    (let* ((bounds (car (sqlite-select
+                        db "SELECT MIN(start_timestamp), MAX(end_timestamp)
+                            FROM fit_activity WHERE end_timestamp > start_timestamp")))
+           (start (if-let* ((value (alist-get :start-date params)))
+                      (time-convert value 'integer)
+                    (when (car bounds) (midnight (car bounds)))))
+           (end (if-let* ((value (alist-get :end-date params)))
+                    (1+ (time-convert value 'integer))
+                  (when (cadr bounds) (midnight (1- (cadr bounds)) t))))
+           (days (if (and start end (< start end))
+                     (1+ (- (day-number (1- end)) (day-number start)))
+                   0))
+           (intervals (make-hash-table :test #'equal))
+           (seconds (make-vector 24 0)))
+      (when (> days 0)
+        (dolist (ride (sqlite-select
+                      db "SELECT start_timestamp, end_timestamp FROM fit_activity
+                          WHERE end_timestamp > start_timestamp
+                            AND end_timestamp > ? AND start_timestamp < ?
+                            AND lower(trim(sport_name)) IN
+                              ('cycling', 'bike', 'biking', 'bicycle', 'bicycling')
+                          ORDER BY start_timestamp" (list start end)))
+          (let ((cursor (max start (car ride)))
+                (limit (min end (cadr ride))))
+            (while (< cursor limit)
+              (let* ((date (decode-time cursor))
+                     (second (decoded-time-second date))
+                     ;; Minute boundaries split modern timezone transitions
+                     ;; without assuming every local hour is 3600 UTC seconds.
+                     (next (min limit (+ cursor (- 60 second))))
+                     (within-hour (+ (* 60 (decoded-time-minute date)) second))
+                     (key (list (decoded-time-hour date) (decoded-time-year date)
+                                (decoded-time-month date) (decoded-time-day date))))
+                (push (list within-hour (+ within-hour (- next cursor)))
+                      (gethash key intervals))
+                (setq cursor next)))))
+        (maphash
+         (lambda (key spans)
+           (dolist (span (car (deterred-chains-normalize (list spans) 0)))
+             (cl-incf (aref seconds (car key)) (- (cadr span) (car span)))))
+         intervals))
+      (cl-loop for hour below 24 collect
+               `((hour . ,hour)
+                 (probability . ,(when (> days 0)
+                                   (* 100.0 (/ (aref seconds hour) (* 3600.0 days)))))
+                 (observed_days . ,days))))))
 
 (cl-defmethod deterred-dashboard-fetch-datasets ((_dashboard deterred-dashboard-fit)
                                                  params)
@@ -332,6 +404,7 @@ LEFT JOIN activity_by_week ON activity_by_week.week = weeks.week
 LEFT JOIN podcast_by_week ON podcast_by_week.week = weeks.week
 ORDER BY weeks.week")
            params))
+      (cycling-hourly . ,(deterred-dashboard-fit--cycling-hourly db params))
       (numbers-data
        . ,(deterred-db-select-template-alist
            db
@@ -363,8 +436,9 @@ FROM fit_activity
   (deterred-dashboard-exec-python
    :python-code
    "from matplotlib import pyplot as plt
-from matplotlib.ticker import MaxNLocator
+from matplotlib.ticker import MaxNLocator, PercentFormatter
 from deterred import fig_to_b64
+from math import ceil
 
 import pandas as pd
 import json
@@ -440,6 +514,30 @@ if not df_podcasts.empty:
 else:
     images.append(None)
 
+cycling = pd.DataFrame(data['cycling-hourly']['data'])
+if not cycling.empty and cycling['probability'].notna().any():
+    values = pd.to_numeric(cycling['probability'])
+    days = int(cycling['observed_days'].iloc[0])
+    hours = values.sum() / 100
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.bar(cycling['hour'], values, width=1, align='edge',
+           color='C1', edgecolor='white', linewidth=0.5, alpha=0.85,
+           label=f'Biking · {hours:.1f} h/day')
+    ax.set_title(f'Biking · {days} days')
+    ax.set_xlim(0, 24)
+    ax.set_xticks(range(0, 25, 3))
+    ax.set_xlabel('Hour of day')
+    ax.set_ylabel('Probability')
+    ax.set_ylim(0, min(100, max(5, ceil(values.max() / 5) * 5)))
+    ax.yaxis.set_major_formatter(PercentFormatter())
+    ax.set_axisbelow(True)
+    ax.grid(axis='y', alpha=0.2)
+    ax.legend(loc='best')
+    images.append(fig_to_b64(fig))
+    plt.close(fig)
+else:
+    images.append(None)
+
 print(json.dumps(images))"
    :input data
    :on-success
@@ -465,6 +563,10 @@ print(json.dumps(images))"
      (when (elt images 4)
        (insert (deterred-format (f-h3 "Time spent per month") "\n"))
        (deterred-dashboard-print-images-base64 (elt images 4))
+       (insert "\n"))
+     (when (elt images 7)
+       (insert (deterred-format (f-h2 "Cycling probability") "\n"))
+       (deterred-dashboard-print-images-base64 (elt images 7))
        (insert "\n"))
      (when (elt images 5)
        (insert (deterred-format
